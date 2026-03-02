@@ -685,6 +685,23 @@ async function paymongoCreateCheckoutSession({ orderCode, lineItems, successUrl,
   return data?.data || null;
 }
 
+async function paymongoRetrieveCheckoutSession(checkoutSessionId){
+  if(!checkoutSessionId){
+    throw new Error("Missing PayMongo checkout session id.");
+  }
+  const res = await fetch(`https://api.paymongo.com/v1/checkout_sessions/${encodeURIComponent(checkoutSessionId)}`, {
+    method: "GET",
+    headers: {
+      Authorization: paymongoAuthHeader()
+    }
+  });
+  const data = await res.json();
+  if(!res.ok){
+    throw new Error(data?.errors?.[0]?.detail || data?.error || "Failed to retrieve PayMongo checkout session");
+  }
+  return data?.data || null;
+}
+
 function parsePaymongoSignature(headerValue){
   const out = {};
   for(const part of String(headerValue || "").split(",")){
@@ -888,13 +905,13 @@ async function createOrder(payload, authProfile){
         method: "PATCH",
         serviceRole: true,
         headers: { Prefer: "return=minimal" },
-        body: [{ paymongo_checkout_session_id: checkoutSessionId }]
+        body: { paymongo_checkout_session_id: checkoutSessionId }
       });
       await supabaseRequest(`/rest/v1/payments?order_id=eq.${order.id}`, {
         method: "PATCH",
         serviceRole: true,
         headers: { Prefer: "return=minimal" },
-        body: [{ provider_checkout_session_id: checkoutSessionId }]
+        body: { provider_checkout_session_id: checkoutSessionId }
       });
     }
   }
@@ -928,7 +945,7 @@ async function updateOrderStatus(orderCode, nextStatusInput, actorProfile){
     method: "PATCH",
     serviceRole: true,
     headers: { Prefer: "return=representation" },
-    body: [{ status: nextStatus }]
+    body: { status: nextStatus }
   });
   const updated = updatedRows?.[0];
   await supabaseRequest("/rest/v1/order_status_events", {
@@ -987,7 +1004,7 @@ async function deductStockForOrder(orderId){
       method: "PATCH",
       serviceRole: true,
       headers: { Prefer: "return=minimal" },
-      body: [{ stock_cases: next }]
+      body: { stock_cases: next }
     });
   }
 }
@@ -1008,13 +1025,13 @@ async function markOrderPaidFromWebhook({ orderCode, checkoutSessionId, paymentI
     method: "PATCH",
     serviceRole: true,
     headers: { Prefer: "return=minimal" },
-    body: [{
+    body: {
       payment_status: "paid",
       status: "order_placed",
       paid_at: new Date().toISOString(),
       paymongo_checkout_session_id: checkoutSessionId || order.paymongo_checkout_session_id || null,
       paymongo_payment_id: paymentId || null
-    }]
+    }
   });
 
   const stockAlreadyDeducted = await hasOrderStatusEventNote(order.id, STOCK_MARKER_NOTE);
@@ -1037,13 +1054,13 @@ async function markOrderPaidFromWebhook({ orderCode, checkoutSessionId, paymentI
     method: "PATCH",
     serviceRole: true,
     headers: { Prefer: "return=minimal" },
-    body: [{
+    body: {
       status: "paid",
       provider_event_id: eventId,
       provider_checkout_session_id: checkoutSessionId || null,
       provider_payment_id: paymentId || null,
       raw_payload: rawPayload
-    }]
+    }
   });
 
   await supabaseRequest("/rest/v1/order_status_events", {
@@ -1058,6 +1075,76 @@ async function markOrderPaidFromWebhook({ orderCode, checkoutSessionId, paymentI
   });
 
   return { duplicate: false };
+}
+
+function paymongoCheckoutLooksPaid(checkout){
+  const attrs = checkout?.attributes || {};
+  const checkoutPayments = Array.isArray(attrs.payments) ? attrs.payments : [];
+  const intentPayments = Array.isArray(attrs.payment_intent?.attributes?.payments)
+    ? attrs.payment_intent.attributes.payments
+    : [];
+  const payments = [...checkoutPayments, ...intentPayments];
+  const paidPayment = payments.find(p => String(p?.attributes?.status || "").toLowerCase() === "paid");
+  const intentStatus = String(attrs.payment_intent?.attributes?.status || "").toLowerCase();
+  return {
+    paid: Boolean(paidPayment) || intentStatus === "succeeded",
+    paymentId: paidPayment?.id || null,
+    intentStatus,
+    checkoutStatus: String(attrs.status || "").toLowerCase()
+  };
+}
+
+async function reconcilePaymongoPayment(orderCode, authProfile){
+  const order = await findOrderByCode(orderCode);
+  if(!order) throw new Error("Order not found.");
+  if(authProfile?.role === "customer" && order.user_id !== authProfile.user_id){
+    const err = new Error("Forbidden");
+    err.status = 403;
+    throw err;
+  }
+  if(String(order.payment_status || "").toLowerCase() === "paid"){
+    return {
+      reconciled: true,
+      alreadyPaid: true,
+      order: await getOrderForUserId(order.order_code, order.user_id)
+    };
+  }
+  if(!order.paymongo_checkout_session_id){
+    return {
+      reconciled: false,
+      alreadyPaid: false,
+      reason: "missing_checkout_session",
+      order: await getOrderForUserId(order.order_code, order.user_id)
+    };
+  }
+
+  const checkout = await paymongoRetrieveCheckoutSession(order.paymongo_checkout_session_id);
+  const state = paymongoCheckoutLooksPaid(checkout);
+  if(!state.paid){
+    return {
+      reconciled: false,
+      alreadyPaid: false,
+      reason: state.checkoutStatus || state.intentStatus || "still_pending",
+      order: await getOrderForUserId(order.order_code, order.user_id)
+    };
+  }
+
+  await markOrderPaidFromWebhook({
+    orderCode: order.order_code,
+    checkoutSessionId: order.paymongo_checkout_session_id,
+    paymentId: state.paymentId,
+    eventId: `reconcile:${order.paymongo_checkout_session_id}:${state.paymentId || "paid"}`,
+    rawPayload: {
+      source: "paymongo_checkout_reconcile",
+      checkout
+    }
+  });
+
+  return {
+    reconciled: true,
+    alreadyPaid: false,
+    order: await getOrderForUserId(order.order_code, order.user_id)
+  };
 }
 
 async function handleApi(req, res, url){
@@ -1208,6 +1295,14 @@ async function handleApi(req, res, url){
       return true;
     }
     sendJson(res, 200, { order });
+    return true;
+  }
+
+  if(req.method === "POST" && url.pathname.startsWith("/api/orders/") && url.pathname.endsWith("/reconcile-payment")){
+    const auth = await requireAuth(req, ["customer", "admin", "staff"]);
+    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace("/reconcile-payment", ""));
+    const result = await reconcilePaymongoPayment(orderCode, auth.profile);
+    sendJson(res, 200, result);
     return true;
   }
 

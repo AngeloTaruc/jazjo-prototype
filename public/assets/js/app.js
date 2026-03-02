@@ -208,6 +208,12 @@ async function createOrderApi(payload){
   });
 }
 
+async function reconcileOrderPayment(orderCode){
+  return await apiFetch(`/api/orders/${encodeURIComponent(orderCode)}/reconcile-payment`, {
+    method: "POST"
+  });
+}
+
 function getFavoriteProducts(products = getProducts()){
   const favorites = new Set(getFavorites());
   return products.filter(p => favorites.has(p.id));
@@ -554,6 +560,8 @@ function renderOrders(){
   if(!wrap) return;
 
   const empty = `<div class="card"><div class="small">No orders yet. Go to <a href="customer-shop.html" style="color:#16a34a;font-weight:900">Shop</a> and place an order.</div></div>`;
+  const params = new URLSearchParams(location.search);
+  const paidOrderCode = params.get("paid");
   const draw = (orders)=>{
     if(!orders.length){ wrap.innerHTML = empty; return; }
     wrap.innerHTML = `
@@ -584,8 +592,24 @@ function renderOrders(){
   };
 
   wrap.innerHTML = `<div class="card"><div class="small">Loading orders...</div></div>`;
-  fetchOrdersFromApi()
-    .then(orders => { setOrders(orders); draw(orders); })
+  const ensurePaidState = paidOrderCode
+    ? reconcileOrderPayment(paidOrderCode).catch(err => {
+        console.error(err);
+        return null;
+      })
+    : Promise.resolve(null);
+
+  ensurePaidState
+    .then(() => fetchOrdersFromApi())
+    .then(orders => {
+      setOrders(orders);
+      draw(orders);
+      if(paidOrderCode){
+        const nextUrl = new URL(location.href);
+        nextUrl.searchParams.delete("paid");
+        history.replaceState({}, "", nextUrl.pathname + (nextUrl.searchParams.toString() ? `?${nextUrl.searchParams.toString()}` : ""));
+      }
+    })
     .catch(err => {
       console.error(err);
       wrap.innerHTML = `<div class="card"><div class="small">Failed to load orders from database: ${err.message}</div></div>`;
