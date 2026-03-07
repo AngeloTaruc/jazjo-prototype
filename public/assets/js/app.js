@@ -16,6 +16,11 @@ const LS = {
 const API_BASE = location.protocol === "file:" ? "http://localhost:3000" : "";
 const DEMO_CUSTOMER_EMAIL = "customer@jazjo.com";
 const money = (n) => `PHP ${Number(n).toLocaleString("en-PH", { minimumFractionDigits: 0 })}`;
+const formatQty = (n) => {
+  const num = Number(n || 0);
+  if(Number.isInteger(num)) return String(num);
+  return num.toFixed(2).replace(/\.?0+$/, "");
+};
 
 function load(key, fallback){
   try{
@@ -173,6 +178,15 @@ function getCart(){ return load(LS.cart, []); }
 function setCart(items){ save(LS.cart, items); }
 function getOrders(){ return (load(LS.orders, []) || []).map(normalizeOrderForUI); }
 function setOrders(list){ save(LS.orders, (list || []).map(normalizeOrderForUI)); }
+function getRewardPrefs(){
+  return load(LS.rewards, { selectedRedemptionId: "" }) || { selectedRedemptionId: "" };
+}
+function setRewardPrefs(prefs){
+  const next = {
+    selectedRedemptionId: String(prefs?.selectedRedemptionId || "")
+  };
+  save(LS.rewards, next);
+}
 function favoritesKey(){ return `${LS.favorites}:${getCurrentCustomerEmail().toLowerCase()}`; }
 function getFavorites(){ return load(favoritesKey(), []); }
 function setFavorites(list){ save(favoritesKey(), [...new Set(list || [])]); }
@@ -248,25 +262,35 @@ function getRecommendedProducts(products = getProducts(), orders = getOrders(), 
 }
 
 function productCardMarkup(p, { favorite=false, compact=false } = {}){
+  const packOptions = getPackOptionsForProduct(p);
+  const hasPackChoices = packOptions.length > 1;
   const stockLabel = p.stockCases <= 0 ? `<span class="badge red">Out of Stock</span>` :
                      p.stockCases <= 10 ? `<span class="badge yellow">Low Stock</span>` :
                      `<span class="badge green">In Stock</span>`;
   const favText = favorite ? "Saved" : "Save";
   const disabled = p.stockCases <= 0 ? "disabled style='opacity:.6;cursor:not-allowed'" : "";
   const bodyClass = compact ? "productCard productCard-compact" : "productCard";
+  const packSelector = hasPackChoices
+    ? `<select data-pack-choice>
+         ${packOptions.map((opt) => `
+           <option value="${opt.caseQty}" data-pack-label="${opt.label}">${opt.label} - ${money(p.price * opt.caseQty)}</option>
+         `).join("")}
+       </select>`
+    : "";
   return `
     <div class="${bodyClass}">
       <div class="productMedia">
         <img src="${p.img}" alt="${p.name}" />
       </div>
       <div class="productBody">
-        <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="productTop">
           <p class="productName">${p.name}</p>
           <button class="btn back favoriteBtn ${favorite ? "is-favorite" : ""}" type="button" data-favorite="${p.id}">${favText}</button>
         </div>
         <p class="productMeta">${p.category} - ${p.unit} - ${stockLabel}</p>
         <p class="productPrice">${money(p.price)}</p>
         <div class="productActions">
+          ${packSelector}
           <button class="btn" data-add="${p.id}" ${disabled}>Add to Cart</button>
         </div>
       </div>
@@ -274,10 +298,26 @@ function productCardMarkup(p, { favorite=false, compact=false } = {}){
   `;
 }
 
+function getPackOptionsForProduct(product){
+  return [
+    { label: "1 case", caseQty: 1 },
+    { label: "Half case", caseQty: 0.5 }
+  ];
+}
+
+function getCartLineKey(item){
+  return `${item.productId}::${Number(item.caseQty || 1)}`;
+}
+
 function bindProductCardActions(scope = document){
   qsa("[data-add]", scope).forEach(btn=>{
     btn.addEventListener("click", ()=>{
-      addToCart(btn.dataset.add, 1);
+      const card = btn.closest(".productCard");
+      const packSelect = card?.querySelector("[data-pack-choice]");
+      const selected = packSelect?.selectedOptions?.[0];
+      const caseQty = Number(packSelect?.value || 1);
+      const packLabel = selected?.dataset?.packLabel || "1 case";
+      addToCart(btn.dataset.add, 1, { caseQty, packLabel });
       setCartBadge();
       btn.textContent = "Added";
       setTimeout(()=>btn.textContent="Add to Cart", 900);
@@ -292,11 +332,13 @@ function bindProductCardActions(scope = document){
   });
 }
 
-function addToCart(productId, qty=1){
+function addToCart(productId, qty=1, pack = {}){
   const cart = getCart();
-  const found = cart.find(i => i.productId === productId);
+  const caseQty = Number(pack.caseQty || 1);
+  const packLabel = String(pack.packLabel || "1 case");
+  const found = cart.find(i => i.productId === productId && Number(i.caseQty || 1) === caseQty);
   if(found) found.qty += qty;
-  else cart.push({productId, qty});
+  else cart.push({productId, qty, caseQty, packLabel});
   setCart(cart);
 }
 
@@ -309,7 +351,19 @@ function computeCartTotals(){
   const cart = getCart();
   const lines = cart.map(ci=>{
     const p = products.find(x=>x.id===ci.productId);
-    return { ...ci, p, lineTotal: p ? p.price * ci.qty : 0 };
+    const caseQty = Number(ci.caseQty || 1);
+    const unitPrice = p ? p.price * caseQty : 0;
+    const caseTotal = Number(ci.qty || 0) * caseQty;
+    return {
+      ...ci,
+      p,
+      lineKey: getCartLineKey(ci),
+      unitPrice,
+      caseQty,
+      caseTotal,
+      packLabel: ci.packLabel || p?.unit || "1 unit",
+      lineTotal: unitPrice * Number(ci.qty || 0)
+    };
   }).filter(x=>x.p);
 
   const subtotal = lines.reduce((a,b)=>a+b.lineTotal,0);
@@ -434,6 +488,39 @@ function renderCart(){
   initPublicNav();
   const list = qs("#cartList");
   if(!list) return;
+  const rewardSelect = qs("#rewardSelect");
+  const rewardInfo = qs("#rewardInfo");
+  let rewardSummary = { points: 0, activeRedemptions: [] };
+
+  const renderRewardOptions = () => {
+    if(!rewardSelect) return;
+    const prefs = getRewardPrefs();
+    const active = Array.isArray(rewardSummary.activeRedemptions) ? rewardSummary.activeRedemptions : [];
+    const options = [`<option value="">No reward</option>`].concat(
+      active.map((r) => `<option value="${r.id}">${r.rewardLabel} (${Number(r.pointsCost || 0)} pts)</option>`)
+    );
+    rewardSelect.innerHTML = options.join("");
+    const hasSaved = active.some((r) => String(r.id) === String(prefs.selectedRedemptionId || ""));
+    if(hasSaved){
+      rewardSelect.value = prefs.selectedRedemptionId;
+    }
+    if(rewardInfo){
+      rewardInfo.textContent = active.length
+        ? `Available rewards: ${active.length}. Remaining points: ${Number(rewardSummary.points || 0).toLocaleString()}.`
+        : "No active rewards. Redeem first in Rewards page.";
+    }
+  };
+
+  const refreshRewards = async () => {
+    try{
+      const data = await apiFetch("/api/rewards");
+      rewardSummary = data.rewards || { points: 0, activeRedemptions: [] };
+    }catch(err){
+      console.error(err);
+      rewardSummary = { points: 0, activeRedemptions: [] };
+    }
+    renderRewardOptions();
+  };
 
   const draw = ()=>{
     const {lines, subtotal, deliveryFee, total} = computeCartTotals();
@@ -454,15 +541,16 @@ function renderCart(){
             </div>
             <div>
               <div style="font-weight:1100">${li.p.name}</div>
-              <div class="small">${li.p.category} - ${money(li.p.price)} each</div>
+              <div class="small">${li.p.category} - ${money(li.unitPrice)} per ${li.packLabel}</div>
+              <div class="small">Equivalent to ${formatQty(li.caseTotal)} case(s)</div>
             </div>
           </div>
           <div class="row">
-            <button class="btn back" data-dec="${li.p.id}">-</button>
-            <span class="badge" style="min-width:46px;justify-content:center">${li.qty}</span>
-            <button class="btn back" data-inc="${li.p.id}">+</button>
+            <button class="btn back" data-dec="${li.lineKey}">-</button>
+            <span class="badge" style="min-width:46px;justify-content:center">${formatQty(li.qty)}</span>
+            <button class="btn back" data-inc="${li.lineKey}">+</button>
             <span style="font-weight:1200;min-width:110px;text-align:right">${money(li.lineTotal)}</span>
-            <button class="btn back" data-del="${li.p.id}">Remove</button>
+            <button class="btn back" data-del="${li.lineKey}">Remove</button>
           </div>
         </div>
       </div>
@@ -477,9 +565,9 @@ function renderCart(){
     qsa("[data-del]").forEach(b=>b.onclick=()=>removeItem(b.dataset.del));
   };
 
-  const updateQty = (pid, delta)=>{
+  const updateQty = (lineKey, delta)=>{
     const cart = getCart();
-    const it = cart.find(i=>i.productId===pid);
+    const it = cart.find(i=>getCartLineKey(i)===lineKey);
     if(!it) return;
     it.qty += delta;
     if(it.qty<=0) cart.splice(cart.indexOf(it),1);
@@ -488,8 +576,8 @@ function renderCart(){
     draw();
   };
 
-  const removeItem = (pid)=>{
-    setCart(getCart().filter(i=>i.productId!==pid));
+  const removeItem = (lineKey)=>{
+    setCart(getCart().filter(i=>getCartLineKey(i)!==lineKey));
     setCartBadge();
     draw();
   };
@@ -510,6 +598,7 @@ function renderCart(){
     const contact = qs("#shipContact").value.trim();
     const address = qs("#shipAddress").value.trim();
     const paymentMethod = qs("#paymentMethod").value;
+    const rewardRedemptionId = String(rewardSelect?.value || "").trim();
     let createdOrder = null;
     let checkoutUrl = null;
     try{
@@ -518,7 +607,8 @@ function renderCart(){
         contact,
         address,
         paymentMethod,
-        items: lines.map(l => ({ productId: l.p.id, qty: l.qty }))
+        rewardRedemptionId: rewardRedemptionId || null,
+        items: lines.map(l => ({ productId: l.p.id, qty: l.caseTotal }))
       });
       createdOrder = result.order ? normalizeOrderForUI(result.order) : null;
       checkoutUrl = result.checkoutUrl || null;
@@ -536,6 +626,10 @@ function renderCart(){
 
     setCart([]);
     setCartBadge();
+    if(rewardRedemptionId){
+      setRewardPrefs({ selectedRedemptionId: "" });
+      await refreshRewards();
+    }
     if(checkoutUrl){
       window.location.href = checkoutUrl;
       return;
@@ -544,6 +638,12 @@ function renderCart(){
   });
 
   draw();
+  if(rewardSelect){
+    rewardSelect.addEventListener("change", () => {
+      setRewardPrefs({ selectedRedemptionId: String(rewardSelect.value || "") });
+    });
+    refreshRewards().catch((err) => console.error(err));
+  }
   syncProductsFromApi().then(()=>draw()).catch(err => console.error(err));
 }
 
@@ -558,12 +658,49 @@ function renderOrders(){
   initPublicNav();
   const wrap = qs("#ordersWrap");
   if(!wrap) return;
+  let currentOrdersPage = 1;
+  const pageSize = 8;
 
   const empty = `<div class="card"><div class="small">No orders yet. Go to <a href="customer-shop.html" style="color:#16a34a;font-weight:900">Shop</a> and place an order.</div></div>`;
   const params = new URLSearchParams(location.search);
   const paidOrderCode = params.get("paid");
+  const bindOrderPager = (orders) => {
+    const pager = qs("#ordersPager");
+    if(!pager) return;
+    const totalPages = Math.max(1, Math.ceil((orders || []).length / pageSize));
+    if((orders || []).length <= pageSize){
+      pager.style.display = "none";
+      return;
+    }
+    pager.style.display = "flex";
+    pager.style.justifyContent = "space-between";
+    pager.style.alignItems = "center";
+    pager.style.gap = "10px";
+    pager.innerHTML = `
+      <div class="small">Page ${currentOrdersPage} of ${totalPages} • ${(orders || []).length} order(s)</div>
+      <div class="row" style="gap:8px">
+        <button class="btn back" type="button" data-prev-page ${currentOrdersPage <= 1 ? "disabled" : ""}>Prev</button>
+        <button class="btn back" type="button" data-next-page ${currentOrdersPage >= totalPages ? "disabled" : ""}>Next</button>
+      </div>
+    `;
+    const prev = pager.querySelector("[data-prev-page]");
+    const next = pager.querySelector("[data-next-page]");
+    if(prev) prev.onclick = () => {
+      currentOrdersPage = Math.max(1, currentOrdersPage - 1);
+      draw(orders);
+    };
+    if(next) next.onclick = () => {
+      currentOrdersPage = Math.min(totalPages, currentOrdersPage + 1);
+      draw(orders);
+    };
+  };
   const draw = (orders)=>{
     if(!orders.length){ wrap.innerHTML = empty; return; }
+    const totalPages = Math.max(1, Math.ceil(orders.length / pageSize));
+    if(currentOrdersPage > totalPages) currentOrdersPage = totalPages;
+    if(currentOrdersPage < 1) currentOrdersPage = 1;
+    const start = (currentOrdersPage - 1) * pageSize;
+    const visible = orders.slice(start, start + pageSize);
     wrap.innerHTML = `
       <div class="card">
         <div class="row" style="justify-content:space-between">
@@ -576,7 +713,7 @@ function renderOrders(){
         <table class="table">
           <thead><tr><th>Order ID</th><th>Date</th><th>Total</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            ${orders.map(o=>`
+            ${visible.map(o=>`
               <tr>
                 <td style="font-weight:1000">${o.id}</td>
                 <td>${o.createdAt}</td>
@@ -587,8 +724,10 @@ function renderOrders(){
             `).join("")}
           </tbody>
         </table>
+        <div id="ordersPager" style="margin-top:10px"></div>
       </div>
     `;
+    bindOrderPager(orders);
   };
 
   wrap.innerHTML = `<div class="card"><div class="small">Loading orders...</div></div>`;
@@ -670,7 +809,7 @@ function renderOrderDetails(){
                 </div>
                 <div>
                   <div style="font-weight:1100">${it.name}</div>
-                  <div class="small">${money(it.price)} - Qty ${it.qty}</div>
+                  <div class="small">${money(it.price)} - Qty ${formatQty(it.qty)}</div>
                 </div>
               </div>
               <div style="font-weight:1200">${money(it.price * it.qty)}</div>
@@ -743,18 +882,58 @@ function renderRewards(){
     qs("#points").textContent = points.toLocaleString();
     qs("#nextText").textContent = `Next reward at ${next.toLocaleString()} points`;
     qs("#barFill").style.width = `${pct}%`;
+    const available = Number(rw.points || 0);
+    qsa("[data-redeem]").forEach((btn) => {
+      const cost = Number(btn.dataset.cost || 0);
+      btn.disabled = available < cost;
+      btn.style.opacity = available < cost ? ".6" : "1";
+      btn.title = available < cost ? "Not enough points yet." : "";
+    });
   };
 
-  apiFetch("/api/rewards")
-    .then(data => drawRewards(data.rewards || {points: 0, totalSpent: 0}))
-    .catch(err => {
+  const loadRewards = async () => {
+    try{
+      const data = await apiFetch("/api/rewards");
+      const rw = data.rewards || { points: 0, totalSpent: 0, activeRedemptions: [] };
+      drawRewards(rw);
+      return rw;
+    }catch(err){
       console.error(err);
-      drawRewards({points: 0, totalSpent: 0});
-    });
+      drawRewards({ points: 0, totalSpent: 0, activeRedemptions: [] });
+      return { points: 0, totalSpent: 0, activeRedemptions: [] };
+    }
+  };
+
+  loadRewards();
 
   qsa("[data-redeem]").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      alert("Redeem flow is disabled until rewards write-back is implemented in the backend.");
+    btn.addEventListener("click", async ()=>{
+      const rewardType = String(btn.dataset.rewardType || "").trim();
+      if(!rewardType){
+        alert("Reward setup is missing reward type.");
+        return;
+      }
+      const oldText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Redeeming...";
+      try{
+        const result = await apiFetch("/api/rewards/redeem", {
+          method: "POST",
+          body: JSON.stringify({ rewardType })
+        });
+        const rewardId = result?.reward?.id || "";
+        if(rewardId){
+          setRewardPrefs({ selectedRedemptionId: rewardId });
+        }
+        const summary = result?.summary || {};
+        alert(`Redeemed ${result?.reward?.rewardLabel || "reward"} successfully. Remaining points: ${Number(summary.points || 0).toLocaleString()}`);
+        await loadRewards();
+      }catch(err){
+        alert(`Redeem failed: ${err.message}`);
+      }finally{
+        btn.disabled = false;
+        btn.textContent = oldText;
+      }
     });
   });
 }

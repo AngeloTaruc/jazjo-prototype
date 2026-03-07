@@ -53,6 +53,18 @@ const MIME = {
   ".jpeg": "image/jpeg",
   ".ico": "image/x-icon"
 };
+const REWARD_CATALOG = {
+  free_delivery: {
+    type: "free_delivery",
+    label: "Free Delivery",
+    cost: 500
+  },
+  discount_10: {
+    type: "discount_10",
+    label: "10% Discount",
+    cost: 1000
+  }
+};
 
 function sendJson(res, status, body){
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -209,24 +221,299 @@ async function updateProfileByEmail(email, payload){
 async function getProductsBySkus(skus){
   if(!skus.length) return [];
   const inFilter = encodeURIComponent(`(${escapeCsvValues(skus)})`);
-  const q = `/rest/v1/products?select=id,sku,name,category,unit,price,stock_cases,image_url,is_active&sku=in.${inFilter}`;
-  return await supabaseRequest(q, { serviceRole: true });
+  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,image_url,is_active";
+  const embedQuery = `/rest/v1/products?select=${baseSelect},categories(name)&sku=in.${inFilter}`;
+  try{
+    const rows = await supabaseRequest(embedQuery, { serviceRole: true });
+    return rows.map((r) => ({ ...r, category: getProductCategoryName(r) }));
+  }catch{
+    const rows = await supabaseRequest(`/rest/v1/products?select=${baseSelect}&sku=in.${inFilter}`, { serviceRole: true });
+    const categories = await supabaseRequest("/rest/v1/categories?select=id,name", { serviceRole: true }).catch(() => []);
+    const categoryById = new Map((categories || []).map((c) => [c.id, c.name]));
+    return rows.map((r) => ({ ...r, category: categoryById.get(r.category_id) || "" }));
+  }
+}
+
+function getProductCategoryName(row){
+  if(Array.isArray(row?.categories)) return String(row.categories?.[0]?.name || "");
+  return String(row?.categories?.name || "");
 }
 
 async function listProducts(){
-  const q = "/rest/v1/products?select=id,sku,name,category,unit,price,stock_cases,image_url,is_active&is_active=eq.true&order=name.asc";
-  const rows = await supabaseRequest(q, { serviceRole: true });
+  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,image_url,is_active";
+  const embedQuery = `/rest/v1/products?select=${baseSelect},categories(name)&is_active=eq.true&order=name.asc`;
+  let rows = [];
+  try{
+    rows = await supabaseRequest(embedQuery, { serviceRole: true });
+  }catch{
+    const rawRows = await supabaseRequest(`/rest/v1/products?select=${baseSelect}&is_active=eq.true&order=name.asc`, { serviceRole: true });
+    const categories = await supabaseRequest("/rest/v1/categories?select=id,name", { serviceRole: true }).catch(() => []);
+    const categoryById = new Map((categories || []).map((c) => [c.id, c.name]));
+    rows = rawRows.map((r) => ({
+      ...r,
+      categories: { name: categoryById.get(r.category_id) || "" }
+    }));
+  }
   return rows.map(r => ({
     id: r.sku,
     dbId: r.id,
     sku: r.sku,
     name: r.name,
-    category: r.category,
+    category: getProductCategoryName(r),
+    category_id: r.category_id || null,
     unit: r.unit,
     price: Number(r.price),
     stockCases: Number(r.stock_cases),
     image_url: r.image_url || ""
   }));
+}
+
+async function listAdminCategories(){
+  const rows = await supabaseRequest("/rest/v1/categories?select=id,name&order=name.asc", { serviceRole: true });
+  return rows.map((r) => String(r.name || "").trim()).filter(Boolean);
+}
+
+function normalizeCategoryName(name){
+  return String(name || "").trim().replace(/\s+/g, " ");
+}
+
+async function getCategoryByName(name){
+  const normalized = normalizeCategoryName(name);
+  if(!normalized) return null;
+  const rows = await supabaseRequest(`/rest/v1/categories?select=id,name&name=ilike.${encodeURIComponent(normalized)}&limit=1`, {
+    serviceRole: true
+  });
+  return rows?.[0] || null;
+}
+
+async function ensureCategory(name){
+  const normalized = normalizeCategoryName(name);
+  if(!normalized) throw new Error("Category name is required.");
+  const existing = await getCategoryByName(normalized);
+  if(existing) return existing;
+  const inserted = await supabaseRequest("/rest/v1/categories", {
+    method: "POST",
+    serviceRole: true,
+    headers: { Prefer: "return=representation" },
+    body: [{ name: normalized }]
+  });
+  return inserted?.[0] || null;
+}
+
+async function addAdminCategory(name){
+  const normalized = normalizeCategoryName(name);
+  if(!normalized){
+    throw new Error("Category name is required.");
+  }
+  await ensureCategory(normalized);
+  return await listAdminCategories();
+}
+
+async function getProductBySkuRaw(sku){
+  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,image_url,is_active";
+  const encodedSku = encodeURIComponent(sku);
+  try{
+    const rows = await supabaseRequest(
+      `/rest/v1/products?select=${baseSelect},categories(name)&sku=eq.${encodedSku}&limit=1`,
+      { serviceRole: true }
+    );
+    return rows?.[0] || null;
+  }catch{
+    const rows = await supabaseRequest(
+      `/rest/v1/products?select=${baseSelect}&sku=eq.${encodedSku}&limit=1`,
+      { serviceRole: true }
+    );
+    const row = rows?.[0] || null;
+    if(!row) return null;
+    const cat = row.category_id
+      ? (await supabaseRequest(`/rest/v1/categories?select=id,name&id=eq.${encodeURIComponent(row.category_id)}&limit=1`, { serviceRole: true }).catch(() => []))?.[0]
+      : null;
+    return { ...row, categories: { name: cat?.name || "" } };
+  }
+}
+
+async function getProductByNameRaw(name){
+  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,image_url,is_active";
+  const encodedName = encodeURIComponent(String(name || "").trim());
+  try{
+    const rows = await supabaseRequest(
+      `/rest/v1/products?select=${baseSelect},categories(name)&name=ilike.${encodedName}&limit=1`,
+      { serviceRole: true }
+    );
+    return rows?.[0] || null;
+  }catch{
+    const rows = await supabaseRequest(
+      `/rest/v1/products?select=${baseSelect}&name=ilike.${encodedName}&limit=1`,
+      { serviceRole: true }
+    );
+    const row = rows?.[0] || null;
+    if(!row) return null;
+    const cat = row.category_id
+      ? (await supabaseRequest(`/rest/v1/categories?select=id,name&id=eq.${encodeURIComponent(row.category_id)}&limit=1`, { serviceRole: true }).catch(() => []))?.[0]
+      : null;
+    return { ...row, categories: { name: cat?.name || "" } };
+  }
+}
+
+function makeSkuBase(name){
+  const normalized = String(name || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "PRODUCT";
+}
+
+async function generateUniqueSku(name){
+  const base = makeSkuBase(name).slice(0, 18);
+  for(let i = 0; i < 1000; i++){
+    const suffix = i === 0
+      ? `${Date.now().toString().slice(-5)}`
+      : `${Date.now().toString().slice(-5)}-${i}`;
+    const candidate = `${base}-${suffix}`;
+    const exists = await getProductBySkuRaw(candidate);
+    if(!exists) return candidate;
+  }
+  throw new Error("Failed to generate unique SKU.");
+}
+
+function toInventoryProductRow(row){
+  return {
+    id: row.sku,
+    dbId: row.id,
+    sku: row.sku,
+    name: row.name,
+    category: getProductCategoryName(row),
+    category_id: row.category_id || null,
+    unit: row.unit,
+    price: Number(row.price || 0),
+    stockCases: Number(row.stock_cases || 0),
+    image_url: row.image_url || "",
+    is_active: row.is_active !== false
+  };
+}
+
+async function createInventoryProduct(payload){
+  const providedSku = String(payload.sku || "").trim();
+  const name = String(payload.name || "").trim();
+  const category = normalizeCategoryName(payload.category || "");
+  const unit = String(payload.unit || "").trim();
+  const price = Number(payload.price || 0);
+  const stockCases = Number(payload.stockCases ?? payload.stock_cases ?? 0);
+  const imageUrl = String(payload.imageUrl || payload.image_url || "").trim();
+  const isActive = payload.isActive !== false;
+
+  if(!name || !category || !unit){
+    throw new Error("name, category, and unit are required.");
+  }
+  if(Number.isNaN(price) || price < 0){
+    throw new Error("price must be a non-negative number.");
+  }
+  if(Number.isNaN(stockCases) || stockCases < 0){
+    throw new Error("stockCases must be a non-negative number.");
+  }
+  let sku = providedSku;
+  if(sku){
+    const exists = await getProductBySkuRaw(sku);
+    if(exists){
+      const err = new Error("Product SKU already exists.");
+      err.status = 409;
+      throw err;
+    }
+  } else {
+    sku = await generateUniqueSku(name);
+  }
+
+  const categoryRow = await ensureCategory(category);
+
+  const inserted = await supabaseRequest("/rest/v1/products", {
+    method: "POST",
+    serviceRole: true,
+    headers: { Prefer: "return=representation" },
+    body: [{
+      sku,
+      name,
+      category_id: categoryRow?.id || null,
+      unit,
+      price,
+      stock_cases: stockCases,
+      image_url: imageUrl || null,
+      is_active: isActive
+    }]
+  });
+  return toInventoryProductRow(inserted?.[0] || {});
+}
+
+async function updateInventoryProductByName(name, payload){
+  const existing = await getProductByNameRaw(name);
+  if(!existing){
+    const err = new Error("Product not found.");
+    err.status = 404;
+    throw err;
+  }
+
+  const patch = {};
+  if("name" in payload) patch.name = String(payload.name || "").trim();
+  if("category" in payload){
+    const categoryName = normalizeCategoryName(payload.category || "");
+    if(!categoryName) throw new Error("category cannot be empty.");
+    const categoryRow = await ensureCategory(categoryName);
+    patch.category_id = categoryRow?.id || null;
+  }
+  if("unit" in payload) patch.unit = String(payload.unit || "").trim();
+  if("price" in payload){
+    const price = Number(payload.price);
+    if(Number.isNaN(price) || price < 0) throw new Error("price must be a non-negative number.");
+    patch.price = price;
+  }
+  if("stockCases" in payload || "stock_cases" in payload){
+    const stockCases = Number(payload.stockCases ?? payload.stock_cases);
+    if(Number.isNaN(stockCases) || stockCases < 0) throw new Error("stockCases must be a non-negative number.");
+    patch.stock_cases = stockCases;
+  }
+  if("imageUrl" in payload || "image_url" in payload){
+    patch.image_url = String(payload.imageUrl ?? payload.image_url ?? "").trim() || null;
+  }
+  if("isActive" in payload) patch.is_active = payload.isActive !== false;
+
+  for(const key of ["name", "unit"]){
+    if(key in patch && !patch[key]){
+      throw new Error(`${key} cannot be empty.`);
+    }
+  }
+  if(!Object.keys(patch).length){
+    throw new Error("No editable fields provided.");
+  }
+
+  const updated = await supabaseRequest(`/rest/v1/products?id=eq.${existing.id}`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=representation" },
+    body: patch
+  });
+  return toInventoryProductRow(updated?.[0] || existing);
+}
+
+async function restockInventoryProductByName(payload){
+  const productName = String(payload.productName || payload.product_name || "").trim();
+  const addCases = Number(payload.addCases ?? payload.add_cases ?? 0);
+  if(!productName) throw new Error("productName is required.");
+  if(Number.isNaN(addCases) || addCases <= 0){
+    throw new Error("addCases must be greater than zero.");
+  }
+  const product = await getProductByNameRaw(productName);
+  if(!product){
+    const err = new Error("Product not found.");
+    err.status = 404;
+    throw err;
+  }
+  const nextStock = Number(product.stock_cases || 0) + addCases;
+  const updated = await supabaseRequest(`/rest/v1/products?id=eq.${product.id}`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=representation" },
+    body: { stock_cases: nextStock, is_active: true }
+  });
+  return toInventoryProductRow(updated?.[0] || product);
 }
 
 async function listProfiles(){
@@ -271,15 +558,166 @@ async function listAllOrdersDetailed(){
   }));
 }
 
-function computeRewardsForOrders(orders){
-  const totalSpent = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
-  const points = orders.reduce((sum, o) => sum + Math.floor(Number(o.total || 0) / 100) * 10, 0);
-  return { totalSpent, points };
+function getRewardConfig(type){
+  return REWARD_CATALOG[String(type || "").trim()] || null;
 }
 
-async function getRewardsByEmail(email){
-  const orders = await listOrdersForEmail(email);
-  return computeRewardsForOrders(orders);
+function toRewardLabel(type){
+  return getRewardConfig(type)?.label || String(type || "");
+}
+
+function isMissingRelationError(err, relation){
+  const msg = String(err?.message || "").toLowerCase();
+  return msg.includes(`relation "${String(relation || "").toLowerCase()}"`) || msg.includes(`${String(relation || "").toLowerCase()} does not exist`);
+}
+
+function computeRewardEarnings(orders){
+  const nonCancelled = (orders || []).filter((o) => String(o.status || "") !== "Cancelled");
+  const deliveredCount = nonCancelled.filter((o) => String(o.status || "") === "Delivered").length;
+  const totalSpent = nonCancelled.reduce((sum, o) => sum + Number(o.total || 0), 0);
+  const spendPoints = nonCancelled.reduce((sum, o) => sum + Math.floor(Number(o.total || 0) / 100) * 10, 0);
+  const completionPoints = deliveredCount * 25;
+  return {
+    totalSpent,
+    spendPoints,
+    completionPoints,
+    earnedPoints: spendPoints + completionPoints
+  };
+}
+
+async function listRewardRedemptionsByUserId(userId){
+  try{
+    return await supabaseRequest(
+      `/rest/v1/reward_redemptions?select=id,user_id,email,reward_type,points_cost,status,order_id,created_by,created_at,used_at&user_id=eq.${encodeURIComponent(userId)}&order=created_at.desc`,
+      { serviceRole: true }
+    );
+  }catch(err){
+    if(isMissingRelationError(err, "reward_redemptions")) return [];
+    throw err;
+  }
+}
+
+async function listAllRewardRedemptions(){
+  try{
+    return await supabaseRequest(
+      "/rest/v1/reward_redemptions?select=id,user_id,email,reward_type,points_cost,status,order_id,created_by,created_at,used_at&order=created_at.desc",
+      { serviceRole: true }
+    );
+  }catch(err){
+    if(isMissingRelationError(err, "reward_redemptions")) return [];
+    throw err;
+  }
+}
+
+async function getRewardSummaryForUserId(userId, email = ""){
+  const [orders, redemptions] = await Promise.all([
+    listOrdersForUserId(userId),
+    listRewardRedemptionsByUserId(userId)
+  ]);
+  const earnings = computeRewardEarnings(orders);
+  const reservedOrUsed = (redemptions || []).filter((r) => {
+    const s = String(r.status || "").toLowerCase();
+    return s === "reserved" || s === "used";
+  });
+  const redeemedPoints = reservedOrUsed.reduce((sum, r) => sum + Number(r.points_cost || 0), 0);
+  const points = Math.max(0, Number(earnings.earnedPoints || 0) - redeemedPoints);
+  const activeRedemptions = (redemptions || [])
+    .filter((r) => String(r.status || "").toLowerCase() === "reserved")
+    .map((r) => ({
+      id: r.id,
+      rewardType: r.reward_type,
+      rewardLabel: toRewardLabel(r.reward_type),
+      pointsCost: Number(r.points_cost || 0),
+      createdAt: r.created_at
+    }));
+  return {
+    email,
+    totalSpent: Number(earnings.totalSpent || 0),
+    spendPoints: Number(earnings.spendPoints || 0),
+    completionPoints: Number(earnings.completionPoints || 0),
+    earnedPoints: Number(earnings.earnedPoints || 0),
+    redeemedPoints: Number(redeemedPoints || 0),
+    points: Number(points || 0),
+    activeRedemptions
+  };
+}
+
+async function createRewardRedemption({ userId, email, rewardType, actorUserId }){
+  const cfg = getRewardConfig(rewardType);
+  if(!cfg){
+    throw new Error("Invalid reward type.");
+  }
+  const summary = await getRewardSummaryForUserId(userId, email);
+  if(Number(summary.points || 0) < Number(cfg.cost || 0)){
+    const err = new Error("Customer has insufficient points.");
+    err.status = 409;
+    throw err;
+  }
+  let row;
+  try{
+    const inserted = await supabaseRequest("/rest/v1/reward_redemptions", {
+      method: "POST",
+      serviceRole: true,
+      headers: { Prefer: "return=representation" },
+      body: [{
+        user_id: userId,
+        email: email || null,
+        reward_type: cfg.type,
+        points_cost: cfg.cost,
+        status: "reserved",
+        created_by: actorUserId || null
+      }]
+    });
+    row = inserted?.[0];
+  }catch(err){
+    if(isMissingRelationError(err, "reward_redemptions")){
+      const migrationErr = new Error("Rewards table missing. Run sql/2026-03-07_rewards_logic.sql first.");
+      migrationErr.status = 500;
+      throw migrationErr;
+    }
+    throw err;
+  }
+  const next = await getRewardSummaryForUserId(userId, email);
+  return {
+    ok: true,
+    reward: {
+      id: row?.id,
+      rewardType: cfg.type,
+      rewardLabel: cfg.label,
+      pointsCost: Number(cfg.cost || 0)
+    },
+    summary: next
+  };
+}
+
+async function getReservedRedemptionForUser(redemptionId, userId){
+  if(!redemptionId) return null;
+  try{
+    const rows = await supabaseRequest(
+      `/rest/v1/reward_redemptions?select=id,user_id,email,reward_type,points_cost,status,order_id,created_at&id=eq.${encodeURIComponent(redemptionId)}&user_id=eq.${encodeURIComponent(userId)}&status=eq.reserved&limit=1`,
+      { serviceRole: true }
+    );
+    return rows?.[0] || null;
+  }catch(err){
+    if(isMissingRelationError(err, "reward_redemptions")){
+      const migrationErr = new Error("Rewards table missing. Run sql/2026-03-07_rewards_logic.sql first.");
+      migrationErr.status = 500;
+      throw migrationErr;
+    }
+    throw err;
+  }
+}
+
+function computeRewardDiscount({ rewardType, subtotal, deliveryFee }){
+  const type = String(rewardType || "");
+  if(type === "free_delivery"){
+    return Math.max(0, Number(deliveryFee || 0));
+  }
+  if(type === "discount_10"){
+    const raw = Number(subtotal || 0) * 0.10;
+    return Math.max(0, Number(raw.toFixed(2)));
+  }
+  return 0;
 }
 
 async function getPanelDashboard(){
@@ -338,7 +776,8 @@ async function getPanelInventory(){
     status: Number(p.stockCases) <= 0 ? "Out of Stock" : Number(p.stockCases) <= 10 ? "Low Stock" : "In Stock"
   }));
   const lowStock = inventory.filter(p => p.status !== "In Stock").sort((a,b)=>a.stockCases-b.stockCases);
-  return { inventory, lowStock };
+  const categories = await listAdminCategories();
+  return { inventory, lowStock, categories };
 }
 
 async function getPanelSales(){
@@ -426,26 +865,130 @@ async function getPanelReports(){
 }
 
 async function getPanelRewards(){
-  const customers = await getPanelCustomers();
-  const orders = await listAllOrdersDetailed();
-  const byEmail = new Map();
-  for(const c of customers){
-    byEmail.set(c.email, { customer: c.name, email: c.email, points: 0, totalSpent: 0 });
+  const [profiles, orders, redemptions] = await Promise.all([
+    listProfiles(),
+    listAllOrdersDetailed(),
+    listAllRewardRedemptions()
+  ]);
+  const customerProfiles = profiles.filter((p) => String(p.role || "").toLowerCase() === "customer");
+  const byUser = new Map();
+  for(const p of customerProfiles){
+    byUser.set(p.user_id, {
+      userId: p.user_id,
+      customer: p.full_name || p.email || "Customer",
+      email: p.email || "",
+      totalSpent: 0,
+      spendPoints: 0,
+      completionPoints: 0,
+      earnedPoints: 0,
+      redeemedPoints: 0,
+      points: 0,
+      activeRedemptions: 0
+    });
   }
   for(const o of orders){
-    const email = o.profile?.email || "";
-    const rec = byEmail.get(email) || { customer: o.customerName, email, points: 0, totalSpent: 0 };
-    rec.totalSpent += Number(o.total || 0);
-    rec.points += Math.floor(Number(o.total || 0) / 100) * 10;
-    byEmail.set(email, rec);
+    if(!o.userId) continue;
+    const rec = byUser.get(o.userId) || {
+      userId: o.userId,
+      customer: o.customerName || "Customer",
+      email: o.profile?.email || "",
+      totalSpent: 0,
+      spendPoints: 0,
+      completionPoints: 0,
+      earnedPoints: 0,
+      redeemedPoints: 0,
+      points: 0,
+      activeRedemptions: 0
+    };
+    if(String(o.status || "") !== "Cancelled"){
+      rec.totalSpent += Number(o.total || 0);
+      rec.spendPoints += Math.floor(Number(o.total || 0) / 100) * 10;
+      if(String(o.status || "") === "Delivered"){
+        rec.completionPoints += 25;
+      }
+    }
+    rec.earnedPoints = rec.spendPoints + rec.completionPoints;
+    byUser.set(o.userId, rec);
   }
-  return [...byEmail.values()].sort((a,b)=>b.points-a.points);
+  for(const r of redemptions || []){
+    const rec = byUser.get(r.user_id) || {
+      userId: r.user_id,
+      customer: r.email || "Customer",
+      email: r.email || "",
+      totalSpent: 0,
+      spendPoints: 0,
+      completionPoints: 0,
+      earnedPoints: 0,
+      redeemedPoints: 0,
+      points: 0,
+      activeRedemptions: 0
+    };
+    const s = String(r.status || "").toLowerCase();
+    if(s === "reserved" || s === "used"){
+      rec.redeemedPoints += Number(r.points_cost || 0);
+    }
+    if(s === "reserved"){
+      rec.activeRedemptions += 1;
+    }
+    byUser.set(r.user_id, rec);
+  }
+  const rows = [...byUser.values()].map((r) => ({
+    ...r,
+    points: Math.max(0, Number(r.earnedPoints || 0) - Number(r.redeemedPoints || 0))
+  }));
+  return rows.sort((a,b)=>Number(b.points || 0)-Number(a.points || 0));
+}
+
+async function redeemRewardByAdmin(payload){
+  const rewardType = String(payload.rewardType || "").trim();
+  const customerEmail = String(payload.customerEmail || "").trim().toLowerCase();
+  const profiles = await listProfiles();
+  const customers = profiles.filter((p) => String(p.role || "").toLowerCase() === "customer");
+  const target = customerEmail
+    ? customers.find((p) => String(p.email || "").toLowerCase() === customerEmail)
+    : customers[0];
+  if(!target?.user_id){
+    throw new Error("No eligible customer reward account found.");
+  }
+  const created = await createRewardRedemption({
+    userId: target.user_id,
+    email: target.email || "",
+    rewardType,
+    actorUserId: payload.actorUserId || null
+  });
+  return {
+    ...created,
+    customer: target.full_name || target.email || "Customer",
+    email: target.email || "",
+    rewardType: created.reward.rewardType,
+    redeemedPoints: created.reward.pointsCost,
+    remainingPoints: created.summary.points
+  };
 }
 
 async function getPanelDelivery(){
   const orders = await listAllOrdersDetailed();
-  const active = orders.find(o => ["In Transit","Out for Delivery","Preparing","Order Placed"].includes(o.status)) || orders[0] || null;
-  return { activeOrder: active };
+  const inProgressStatuses = new Set(["In Transit","Out for Delivery","Preparing","Order Placed"]);
+  const activeOrders = orders.filter((o) => inProgressStatuses.has(String(o.status || "")));
+  const productTracks = [];
+  for(const order of orders){
+    for(const item of (order.items || [])){
+      productTracks.push({
+        orderId: order.id,
+        productName: item.name,
+        qty: Number(item.qty || 0),
+        customerName: order.customerName,
+        status: order.status,
+        updatedAt: (order.status_events || []).slice(-1)[0]?.created_at || order.createdAt,
+        orderCreatedAt: order.createdAt,
+        statusEvents: order.status_events || []
+      });
+    }
+  }
+  return {
+    activeOrder: activeOrders[0] || orders[0] || null,
+    productTracks
+  };
 }
 
 async function supabasePasswordLogin(email, password){
@@ -791,6 +1334,7 @@ async function createOrder(payload, authProfile){
   const contact = String(payload.contact || "").trim();
   const address = String(payload.address || "").trim();
   const paymentMethod = String(payload.paymentMethod || "QRPH").trim();
+  const rewardRedemptionId = String(payload.rewardRedemptionId || payload.reward_redemption_id || "").trim();
   const items = Array.isArray(payload.items) ? payload.items : [];
 
   if(!authProfile?.user_id || !customerName || !contact || !address || !items.length){
@@ -834,28 +1378,47 @@ async function createOrder(payload, authProfile){
   }
 
   const deliveryFee = subtotal >= 800 ? 0 : 60;
-  const total = subtotal + deliveryFee;
+  const redemption = rewardRedemptionId
+    ? await getReservedRedemptionForUser(rewardRedemptionId, authProfile.user_id)
+    : null;
+  if(rewardRedemptionId && !redemption){
+    const err = new Error("Selected reward is invalid or already used.");
+    err.status = 409;
+    throw err;
+  }
+  const discountAmount = redemption
+    ? computeRewardDiscount({
+      rewardType: redemption.reward_type,
+      subtotal,
+      deliveryFee
+    })
+    : 0;
+  const total = Math.max(0, Number((subtotal + deliveryFee - discountAmount).toFixed(2)));
   const orderCode = makeOrderCode();
 
   const useQrph = isQrphMethod(paymentMethod);
+  const orderInsertBody = {
+    order_code: orderCode,
+    user_id: authProfile.user_id,
+    customer_name: customerName,
+    contact,
+    address,
+    subtotal,
+    delivery_fee: deliveryFee,
+    total,
+    status: useQrph ? "pending_payment" : "order_placed",
+    payment_status: useQrph ? "pending" : "pending",
+    payment_provider: useQrph ? "paymongo" : null,
+    payment_method: paymentMethod
+  };
+  if(Number(discountAmount || 0) > 0){
+    orderInsertBody.discount_amount = discountAmount;
+  }
   const inserted = await supabaseRequest("/rest/v1/orders", {
     method: "POST",
     serviceRole: true,
     headers: { Prefer: "return=representation" },
-    body: [{
-      order_code: orderCode,
-      user_id: authProfile.user_id,
-      customer_name: customerName,
-      contact,
-      address,
-      subtotal,
-      delivery_fee: deliveryFee,
-      total,
-      status: useQrph ? "pending_payment" : "order_placed",
-      payment_status: useQrph ? "pending" : "pending",
-      payment_provider: useQrph ? "paymongo" : null,
-      payment_method: paymentMethod
-    }]
+    body: [orderInsertBody]
   });
 
   const order = inserted[0];
@@ -878,6 +1441,29 @@ async function createOrder(payload, authProfile){
     }]
   });
 
+  if(redemption){
+    await supabaseRequest(`/rest/v1/reward_redemptions?id=eq.${encodeURIComponent(redemption.id)}`, {
+      method: "PATCH",
+      serviceRole: true,
+      headers: { Prefer: "return=minimal" },
+      body: {
+        status: "used",
+        order_id: order.id,
+        used_at: new Date().toISOString()
+      }
+    });
+    await supabaseRequest("/rest/v1/order_status_events", {
+      method: "POST",
+      serviceRole: true,
+      headers: { Prefer: "return=minimal" },
+      body: [{
+        order_id: order.id,
+        status: useQrph ? "pending_payment" : "order_placed",
+        note: `Reward applied: ${toRewardLabel(redemption.reward_type)} (-PHP ${Number(discountAmount || 0).toFixed(2)}).`
+      }]
+    });
+  }
+
   await supabaseRequest("/rest/v1/payments", {
     method: "POST",
     serviceRole: true,
@@ -891,9 +1477,9 @@ async function createOrder(payload, authProfile){
       orderCode: order.order_code,
       lineItems: itemRows.map((it) => ({
         currency: "PHP",
-        amount: toCentavos(it.unit_price),
+        amount: toCentavos(it.line_total),
         name: it.name,
-        quantity: it.qty
+        quantity: 1
       })),
       successUrl: `${APP_BASE_URL}/customer/customer-orders.html?paid=${encodeURIComponent(order.order_code)}`,
       cancelUrl: `${APP_BASE_URL}/customer/customer-cart.html?cancelled=${encodeURIComponent(order.order_code)}`
@@ -931,15 +1517,7 @@ async function updateOrderStatus(orderCode, nextStatusInput, actorProfile){
   const order = rows?.[0];
   if(!order) throw new Error("Order not found.");
 
-  const unpaidQrph =
-    isQrphMethod(order.payment_method) &&
-    String(order.payment_status || "").toLowerCase() !== "paid";
-  const allowedBeforePayment = new Set(["pending_payment", "cancelled"]);
-  if(unpaidQrph && !allowedBeforePayment.has(nextStatus)){
-    const err = new Error("Cannot move QRPH order status until payment is marked paid.");
-    err.status = 409;
-    throw err;
-  }
+  // Admin/staff can override status flow from panel even if QRPH payment is still pending.
 
   const updatedRows = await supabaseRequest(`/rest/v1/orders?order_code=eq.${encodeURIComponent(orderCode)}`, {
     method: "PATCH",
@@ -1268,8 +1846,20 @@ async function handleApi(req, res, url){
 
   if(req.method === "GET" && url.pathname === "/api/rewards"){
     const auth = await requireAuth(req);
-    const rewards = computeRewardsForOrders(await listOrdersForUserId(auth.profile.user_id));
+    const rewards = await getRewardSummaryForUserId(auth.profile.user_id, auth.profile.email || "");
     sendJson(res, 200, { rewards });
+    return true;
+  }
+  if(req.method === "POST" && url.pathname === "/api/rewards/redeem"){
+    const auth = await requireAuth(req, ["customer", "admin", "staff"]);
+    const payload = await readJson(req);
+    const result = await createRewardRedemption({
+      userId: auth.profile.user_id,
+      email: auth.profile.email || "",
+      rewardType: payload.rewardType,
+      actorUserId: auth.profile.user_id
+    });
+    sendJson(res, 201, result);
     return true;
   }
 
@@ -1339,6 +1929,40 @@ async function handleApi(req, res, url){
     sendJson(res, 200, await getPanelInventory());
     return true;
   }
+  if(req.method === "POST" && url.pathname === "/api/panel/admin/inventory/products"){
+    await requireAuth(req, ["admin"]);
+    const payload = await readJson(req);
+    const product = await createInventoryProduct(payload);
+    sendJson(res, 201, { ok: true, product });
+    return true;
+  }
+  if(req.method === "PATCH" && url.pathname.startsWith("/api/panel/admin/inventory/products/by-name/")){
+    await requireAuth(req, ["admin"]);
+    const name = decodeURIComponent(url.pathname.replace("/api/panel/admin/inventory/products/by-name/", ""));
+    const payload = await readJson(req);
+    const product = await updateInventoryProductByName(name, payload);
+    sendJson(res, 200, { ok: true, product });
+    return true;
+  }
+  if(req.method === "POST" && url.pathname === "/api/panel/admin/inventory/restock"){
+    await requireAuth(req, ["admin"]);
+    const payload = await readJson(req);
+    const product = await restockInventoryProductByName(payload);
+    sendJson(res, 200, { ok: true, product });
+    return true;
+  }
+  if(req.method === "GET" && url.pathname === "/api/panel/admin/categories"){
+    await requireAuth(req, ["admin"]);
+    sendJson(res, 200, { categories: await listAdminCategories() });
+    return true;
+  }
+  if(req.method === "POST" && url.pathname === "/api/panel/admin/categories"){
+    await requireAuth(req, ["admin"]);
+    const payload = await readJson(req);
+    const categories = await addAdminCategory(payload.name);
+    sendJson(res, 201, { ok: true, categories });
+    return true;
+  }
   if(req.method === "GET" && url.pathname === "/api/panel/admin/customers"){
     await requireAuth(req, ["admin"]);
     sendJson(res, 200, { customers: await getPanelCustomers() });
@@ -1352,6 +1976,25 @@ async function handleApi(req, res, url){
   if(req.method === "GET" && url.pathname === "/api/panel/admin/rewards"){
     await requireAuth(req, ["admin"]);
     sendJson(res, 200, { rewards: await getPanelRewards() });
+    return true;
+  }
+  if(req.method === "GET" && url.pathname === "/api/panel/staff/rewards"){
+    await requireAuth(req, ["staff", "admin"]);
+    sendJson(res, 200, { rewards: await getPanelRewards() });
+    return true;
+  }
+  if(req.method === "POST" && url.pathname === "/api/panel/admin/rewards/redeem"){
+    const auth = await requireAuth(req, ["admin"]);
+    const payload = await readJson(req);
+    const result = await redeemRewardByAdmin({ ...payload, actorUserId: auth.profile.user_id });
+    sendJson(res, 200, result);
+    return true;
+  }
+  if(req.method === "POST" && url.pathname === "/api/panel/staff/rewards/redeem"){
+    const auth = await requireAuth(req, ["staff", "admin"]);
+    const payload = await readJson(req);
+    const result = await redeemRewardByAdmin({ ...payload, actorUserId: auth.profile.user_id });
+    sendJson(res, 200, result);
     return true;
   }
   if(req.method === "GET" && url.pathname === "/api/panel/admin/sales"){
