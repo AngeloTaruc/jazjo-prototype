@@ -2050,7 +2050,7 @@ async function serveStatic(res, url){
   }
 }
 
-const server = http.createServer(async (req, res) => {
+async function handleRequest(req, res){
   try{
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     const handled = await handleApi(req, res, url);
@@ -2060,8 +2060,15 @@ const server = http.createServer(async (req, res) => {
     console.error(err);
     sendJson(res, Number(err.status || 500), { error: err.message || "Internal server error" });
   }
-});
+}
 
-server.listen(PORT, () => {
-  console.log(`Jazjo server running at http://localhost:${PORT}`);
-});
+const server = http.createServer(handleRequest);
+
+if(!process.env.VERCEL){
+  server.listen(PORT, () => {
+    console.log(`Jazjo server running at http://localhost:${PORT}`);
+  });
+}
+
+export { handleRequest };
+export default handleRequest;
