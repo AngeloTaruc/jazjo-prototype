@@ -7,12 +7,16 @@
   },
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "/api/:path*"
+    },
+    {
       "source": "/",
       "destination": "/public/index.html"
     },
     {
-      "source": "/(.*)",
-      "destination": "/public/$1"
+      "source": "/:path((?!api/).*)",
+      "destination": "/public/:path"
     }
   ]
 }
