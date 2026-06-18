@@ -9,14 +9,14 @@
     :root{
       --green:#16a34a;
       --greenDark:#0b7a33;
-      --text:#0f172a;
-      --muted:#64748b;
-      --bg:#f6f8fb;
-      --card:#ffffff;
-      --line:#e5e7eb;
-      --shadow: 0 12px 30px rgba(15,23,42,.10);
-      --shadow2: 0 10px 22px rgba(15,23,42,.08);
-      --radius2: 22px;
+      --text:#f8fafc;
+      --muted:#a9b5c7;
+      --bg:#090d14;
+      --card:#111827;
+      --line:#263247;
+      --shadow: 0 18px 44px rgba(0,0,0,.34);
+      --shadow2: 0 12px 28px rgba(0,0,0,.24);
+      --radius2: 16px;
       --radius: 16px;
       --navH: 76px;
     }
@@ -26,7 +26,10 @@
       margin:0;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       color:var(--text);
-      background:var(--bg);
+      background:
+        linear-gradient(135deg, rgba(22,163,74,.12), transparent 30%),
+        linear-gradient(315deg, rgba(59,130,246,.10), transparent 32%),
+        var(--bg);
     }
     a{color:inherit;text-decoration:none}
     button,input,select{font-family:inherit}
@@ -35,9 +38,9 @@
     /* NAV */
     .nav{
       position:sticky;top:0;z-index:50;height:var(--navH);
-      background:rgba(255,255,255,.92);
+      background:rgba(7,11,18,.92);
       backdrop-filter: blur(10px);
-      border-bottom:1px solid rgba(229,231,235,.8);
+      border-bottom:1px solid var(--line);
     }
     .nav-inner{
       max-width:1200px;height:100%;
@@ -47,15 +50,15 @@
     .brand{display:flex;align-items:center;gap:12px;font-weight:800}
     .logo{
       width:40px;height:40px;border-radius:12px;
-      background:linear-gradient(135deg, var(--green), #22c55e);
+      background:linear-gradient(135deg, var(--green), #60a5fa);
       display:grid;place-items:center;
       box-shadow: 0 10px 18px rgba(22,163,74,.22);
       flex:0 0 auto;
     }
     .logo svg{width:20px;height:20px;fill:#fff}
-    .nav-links{display:flex;align-items:center;gap:22px;color:#475569;font-weight:600;font-size:14.5px}
+    .nav-links{display:flex;align-items:center;gap:22px;color:var(--muted);font-weight:600;font-size:14.5px}
     .nav-links a{padding:10px 6px;border-radius:10px}
-    .nav-links a:hover{background:rgba(15,23,42,.05);color:#111827}
+    .nav-links a:hover{background:rgba(255,255,255,.06);color:var(--text)}
     .nav-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 
     .btn{
@@ -74,8 +77,8 @@
     .btn:active{transform: translateY(1px)}
     .btn-primary{background:var(--green);color:#fff;box-shadow: 0 12px 24px rgba(22,163,74,.18)}
     .btn-primary:hover{filter:brightness(.95)}
-    .btn-ghost{background:rgba(15,23,42,.06);color:#0f172a}
-    .btn-ghost:hover{background:rgba(15,23,42,.10)}
+    .btn-ghost{background:#1a2436;color:var(--text);border:1px solid var(--line)}
+    .btn-ghost:hover{background:#22304a}
 
     /* HEADER */
     .header{
@@ -109,8 +112,8 @@
       display:flex;
       gap:10px;
       align-items:center;
-      background:#fff;
-      border:1px solid rgba(229,231,235,.95);
+      background:#0c1220;
+      border:1px solid var(--line);
       border-radius: 999px;
       padding: 10px 14px;
       box-shadow: var(--shadow2);
@@ -120,7 +123,7 @@
       border:0;
       outline:none;
       font-weight:700;
-      color:#0f172a;
+      color:var(--text);
       background:transparent;
     }
     .filter{
@@ -129,12 +132,12 @@
       align-items:center;
     }
     select{
-      border:1px solid rgba(229,231,235,.95);
+      border:1px solid var(--line);
       border-radius: 999px;
       padding: 10px 12px;
-      background:#fff;
+      background:#0c1220;
       font-weight:800;
-      color:#0f172a;
+      color:var(--text);
       box-shadow: var(--shadow2);
       outline:none;
     }
@@ -149,7 +152,7 @@
 
     .card{
       background:var(--card);
-      border:1px solid rgba(229,231,235,.9);
+      border:1px solid var(--line);
       border-radius: var(--radius2);
       box-shadow: var(--shadow2);
       overflow:hidden;
@@ -159,26 +162,27 @@
     }
     .img{
       height:170px;
-      background: #eaf7ee;
+      background: linear-gradient(135deg, rgba(22,163,74,.12), rgba(96,165,250,.12));
       position:relative;
       overflow:hidden;
     }
     .img img{
       width:100%;
       height:100%;
-      object-fit:cover;
+      object-fit:contain;
+      padding:12px;
       display:block;
     }
     .badge{
       position:absolute;
       top:12px; left:12px;
-      background: rgba(255,255,255,.92);
-      border:1px solid rgba(229,231,235,.9);
+      background: rgba(12,18,32,.92);
+      border:1px solid var(--line);
       padding:7px 10px;
       border-radius:999px;
       font-weight:900;
       font-size:12px;
-      color:#0f172a;
+      color:var(--text);
       box-shadow: var(--shadow2);
     }
     .content{
@@ -220,36 +224,35 @@
       width: 76px;
       padding:10px 10px;
       border-radius: 999px;
-      border:1px solid rgba(229,231,235,.95);
+      border:1px solid var(--line);
       font-weight:900;
       outline:none;
-      background:#fff;
+      background:#0c1220;
+      color:var(--text);
     }
     .card .btn{width:100%}
 
-    /* UPLOAD AREA */
-    .upload{
+    .category-options{
+      display:grid;
+      grid-template-columns:repeat(4,1fr);
+      gap:12px;
       margin-top:18px;
-      background:#fff;
-      border:1px solid rgba(229,231,235,.9);
-      border-radius: var(--radius2);
-      box-shadow: var(--shadow);
-      padding: 16px;
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:14px;
-      flex-wrap:wrap;
     }
-    .upload strong{font-weight:1000}
-    .upload small{color:var(--muted);font-weight:600}
-    input[type="file"]{
-      border:1px solid rgba(229,231,235,.95);
-      padding:10px 12px;
-      border-radius: 14px;
-      background:#fff;
-      font-weight:800;
-      max-width: 320px;
+    .category-card{
+      border:1px solid var(--line);
+      background:linear-gradient(135deg,#111827,#162033);
+      color:var(--text);
+      border-radius:16px;
+      min-height:82px;
+      padding:14px;
+      text-align:left;
+      font-weight:1000;
+      cursor:pointer;
+      box-shadow:var(--shadow2);
+    }
+    .category-card:hover,.category-card.active{
+      border-color:rgba(22,163,74,.65);
+      background:linear-gradient(135deg,rgba(22,163,74,.18),#162033);
     }
 
     /* CART BAR */
@@ -263,9 +266,9 @@
       max-width:1200px;
       margin:0 auto;
       padding: 12px 12px;
-      background: rgba(255,255,255,.92);
-      border:1px solid rgba(229,231,235,.95);
-      border-radius: 999px;
+      background: rgba(17,24,39,.94);
+      border:1px solid var(--line);
+      border-radius: 16px;
       box-shadow: var(--shadow);
       display:flex;
       align-items:center;
@@ -275,7 +278,7 @@
     }
     .cartinfo{
       font-weight:900;
-      color:#0f172a;
+      color:var(--text);
     }
     .cartinfo span{
       color:var(--muted);
@@ -289,9 +292,11 @@
     @media (max-width: 900px){
       .nav-links{display:none;}
       .grid{grid-template-columns: repeat(2, 1fr);}
+      .category-options{grid-template-columns:repeat(2, 1fr);}
     }
     @media (max-width: 560px){
       .grid{grid-template-columns: 1fr;}
+      .category-options{grid-template-columns:1fr;}
       .cartinner{border-radius: 18px;}
     }
   </style>
@@ -341,27 +346,15 @@
       <div class="filter">
         <select id="category">
           <option value="all">All Categories</option>
-          <option value="softdrinks">Softdrinks</option>
-          <option value="juice">Juice</option>
+          <option value="soft drinks">Soft Drinks</option>
           <option value="water">Water</option>
-          <option value="tea">Tea</option>
+          <option value="energy drinks">Energy Drinks</option>
+          <option value="juice">Juice</option>
         </select>
       </div>
     </div>
 
-    <!-- Upload (Admin/Staff can use this later; for now it's demo-ready) -->
-    <div class="upload">
-      <div>
-        <strong>Upload a Product Image (JPG/PNG)</strong><br />
-        <small>Select a product card below, then upload an image to replace its picture.</small>
-      </div>
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <span style="font-weight:900;color:var(--muted)">Selected:</span>
-        <span id="selectedName" style="font-weight:1000;">None</span>
-        <input id="imgUpload" type="file" accept=".jpg,.jpeg,.png" />
-        <button class="btn btn-ghost" id="clearImg" type="button">Clear Image</button>
-      </div>
-    </div>
+    <section class="category-options" id="categoryOptions"></section>
 
     <section class="grid" id="grid"></section>
   </main>

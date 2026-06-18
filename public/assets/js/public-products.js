@@ -4,17 +4,15 @@
 
   const search = document.getElementById("search");
   const category = document.getElementById("category");
+  const categoryOptions = document.getElementById("categoryOptions");
   const cartCount = document.getElementById("cartCount");
   const cartTotal = document.getElementById("cartTotal");
   const clearCartBtn = document.getElementById("clearCart");
   const checkoutBtn = document.getElementById("checkout");
-  const imgUpload = document.getElementById("imgUpload");
-  const selectedName = document.getElementById("selectedName");
-  const clearImg = document.getElementById("clearImg");
 
   let products = [];
-  let selectedProductId = null;
-  let cart = [];
+  const CART_KEY = "jazjo_cart_v1";
+  let cart = loadCart();
 
   const money = (n) => "PHP " + Number(n || 0).toFixed(2);
   const safe = (s) => String(s || "").replace(/[<&>]/g, "");
@@ -30,10 +28,37 @@
       { label: "Half case", value: 0.5 }
     ];
   };
+  const normalizeCategory = (value, name = "") => {
+    const raw = String(value || "").trim().toLowerCase().replace(/[-_]/g, " ").replace(/\s+/g, " ");
+    const text = `${raw} ${String(name || "").toLowerCase()}`;
+    if (raw === "softdrinks" || raw === "soft drinks" || raw === "soft drink") return "soft drinks";
+    if (raw === "energy" || raw === "energy drink" || raw === "energy drinks") return "energy drinks";
+    if (/water|wilkins|nature spring/.test(text)) return "water";
+    if (/cobra|sting|gatorade|energy/.test(text)) return "energy drinks";
+    if (/juice|tea|c2|magnolia|zesto/.test(text)) return "juice";
+    if (/coke|cola|sprite|royal|rc|root beer|soda|mountaindew|mountain dew/.test(text)) return "soft drinks";
+    return raw;
+  };
+  const displayCategory = (value) => normalizeCategory(value).replace(/\b\w/g, (m) => m.toUpperCase());
+
+  function loadCart() {
+    try {
+      return JSON.parse(localStorage.getItem(CART_KEY) || "[]");
+    } catch {
+      return [];
+    }
+  }
+
+  function saveCart() {
+    localStorage.setItem(CART_KEY, JSON.stringify(cart));
+  }
 
   function updateCartBar() {
     const count = cart.reduce((s, i) => s + i.qty, 0);
-    const total = cart.reduce((s, i) => s + (i.qty * i.price), 0);
+    const total = cart.reduce((s, i) => {
+      const product = products.find((p) => String(p.id) === String(i.productId));
+      return s + (Number(i.qty || 0) * Number(i.caseQty || 1) * Number(product?.price || 0));
+    }, 0);
     cartCount.textContent = `${count} item${count !== 1 ? "s" : ""}`;
     cartTotal.textContent = money(total);
   }
@@ -41,16 +66,35 @@
   function addToCart(product, qty, pack) {
     const caseQty = Number(pack?.value || 1);
     const packLabel = String(pack?.label || "1 case");
-    const price = Number(product.price || 0) * caseQty;
-    const existing = cart.find(i => String(i.id) === String(product.id) && Number(i.caseQty || 1) === caseQty);
+    const existing = cart.find(i => String(i.productId) === String(product.id) && Number(i.caseQty || 1) === caseQty);
+    const nextCases = (Number(existing?.qty || 0) + Number(qty || 0)) * caseQty;
+    if (nextCases > Number(product.stockCases || 0)) {
+      alert(`Only ${product.stockCases} case(s) available for ${product.name}.`);
+      return;
+    }
     if (existing) existing.qty += qty;
-    else cart.push({ id: product.id, name: product.name, price, qty, caseQty, packLabel });
+    else cart.push({ productId: product.id, qty, caseQty, packLabel });
+    saveCart();
     updateCartBar();
   }
 
   function render() {
     const q = (search.value || "").toLowerCase().trim();
-    const cat = category.value;
+    const cat = normalizeCategory(category.value);
+    const preferred = ["soft drinks", "water", "energy drinks", "juice"];
+    if (categoryOptions) {
+      categoryOptions.innerHTML = preferred.map((c) => `
+        <button class="category-card ${cat === c ? "active" : ""}" type="button" data-category="${c}">
+          ${displayCategory(c)}
+        </button>
+      `).join("");
+      categoryOptions.querySelectorAll("[data-category]").forEach((btn) => {
+        btn.onclick = () => {
+          category.value = btn.dataset.category;
+          render();
+        };
+      });
+    }
     const filtered = products.filter((p) => {
       const matchText = p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q);
       const matchCat = cat === "all" || p.category === cat;
@@ -70,15 +114,12 @@
         </div>
         <div class="content">
           <h3 class="title">${p.name}</h3>
-          <div class="meta">
-            <span>${p.category.toUpperCase()}</span>
-            <span class="price">${money(p.price)}</span>
-          </div>
+          <span class="price">${money(p.price)}</span>
+          <div class="meta"><span>${displayCategory(p.category)}</span></div>
           <div class="row">
             ${packSelectHtml}
             <input class="qty" type="number" min="1" value="1" />
             <button class="btn btn-primary add">Add to Cart</button>
-            <button class="btn btn-ghost select">Select</button>
           </div>
         </div>
       </article>
@@ -92,7 +133,6 @@
       const packSelect = card.querySelector(".pack");
       const priceText = card.querySelector(".price");
       const addBtn = card.querySelector(".add");
-      const selBtn = card.querySelector(".select");
 
       const refreshDisplayedPrice = () => {
         const factor = Number(packSelect?.value || 1);
@@ -112,17 +152,8 @@
           label: chosen ? chosen.textContent : "1 case"
         });
       });
-
-      const selectCard = () => {
-        selectedProductId = id;
-        selectedName.textContent = product.name;
-        grid.querySelectorAll(".card").forEach((c) => { c.style.outline = "none"; });
-        card.style.outline = "3px solid rgba(22,163,74,.35)";
-      };
-
-      selBtn.addEventListener("click", selectCard);
-      card.querySelector(".img").addEventListener("click", selectCard);
     });
+    updateCartBar();
   }
 
   async function loadProducts() {
@@ -133,28 +164,28 @@
     products = (data.products || []).map((p, idx) => ({
       id: p.id || p.sku || String(idx + 1),
       name: p.name,
-      category: String(p.category || "").toLowerCase(),
+      category: normalizeCategory(p.category, p.name),
       unit: p.unit || "",
       price: Number(p.price || 0),
       stock: stockLabel(p.stockCases ?? p.stock_cases),
+      stockCases: Number(p.stockCases ?? p.stock_cases ?? 0),
       img: p.image_url || placeholder(p.name)
     }));
     render();
   }
 
   search.addEventListener("input", render);
+  search.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      render();
+    }
+  });
   category.addEventListener("change", render);
-  clearCartBtn.addEventListener("click", () => { cart = []; updateCartBar(); });
+  clearCartBtn.addEventListener("click", () => { cart = []; saveCart(); updateCartBar(); });
   checkoutBtn.addEventListener("click", () => {
     if (!cart.length) return alert("Your cart is empty.");
-    window.location.href = "customer/customer-cart.html";
-  });
-  imgUpload.addEventListener("change", () => {
-    imgUpload.value = "";
-    alert("Product image editing here is disabled. Manage product images in the database/admin flow.");
-  });
-  clearImg.addEventListener("click", () => {
-    alert("Image reset is disabled here. Manage product images in the database/admin flow.");
+    window.location.href = "/customer-app/#/cart";
   });
 
   loadProducts().catch((err) => {

@@ -40,3 +40,53 @@ test("parseProductImagePayload rejects oversized images", () => {
     /Product image must be 5MB or smaller/
   );
 });
+
+test("validateCustomerRegistration requires first and last name", () => {
+  assert.throws(
+    () => server.validateCustomerRegistration({
+      firstName: "Juan",
+      lastName: "",
+      email: "juan@example.com",
+      contact: "09123456789",
+      address: "San Juan",
+      password: "StrongPass1!"
+    }),
+    /First name and last name are required/
+  );
+});
+
+test("validateCustomerRegistration accepts valid Philippine contact and strong password", () => {
+  const result = server.validateCustomerRegistration({
+    firstName: "Juan",
+    lastName: "Dela Cruz",
+    email: "JUAN@example.com",
+    contact: "09123456789",
+    address: "San Juan",
+    password: "StrongPass1!"
+  });
+
+  assert.equal(result.email, "juan@example.com");
+  assert.equal(result.fullName, "Juan Dela Cruz");
+  assert.equal(result.contact, "09123456789");
+});
+
+test("validateCustomerRegistration rejects invalid Philippine contact", () => {
+  assert.throws(
+    () => server.validateCustomerRegistration({
+      firstName: "Juan",
+      lastName: "Dela Cruz",
+      email: "juan@example.com",
+      contact: "+639123456789",
+      address: "San Juan",
+      password: "StrongPass1!"
+    }),
+    /Contact number must use Philippine format/
+  );
+});
+
+test("validatePasswordComplexity requires mixed character classes", () => {
+  assert.throws(
+    () => server.validatePasswordComplexity("password123"),
+    /Password must include uppercase, lowercase, number, and special character/
+  );
+});

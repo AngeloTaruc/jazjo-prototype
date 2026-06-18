@@ -228,7 +228,7 @@ function escapeCsvValues(values){
 
 function toUiStatus(dbStatus){
   const map = {
-    pending_payment: "Order Placed",
+    pending_payment: "Pending Payment",
     order_placed: "Order Placed",
     preparing: "Preparing",
     in_transit: "In Transit",
@@ -237,6 +237,53 @@ function toUiStatus(dbStatus){
     cancelled: "Cancelled"
   };
   return map[dbStatus] || dbStatus || "Order Placed";
+}
+
+function httpError(message, status = 400){
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function validatePhilippineContact(contact){
+  const normalized = String(contact || "").trim();
+  if(!/^09\d{9}$/.test(normalized)){
+    throw httpError("Contact number must use Philippine format: 09xxxxxxxxx.");
+  }
+  return normalized;
+}
+
+function validatePasswordComplexity(password){
+  const value = String(password || "");
+  if(value.length < 8){
+    throw httpError("Password must be at least 8 characters.");
+  }
+  if(!/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9]/.test(value)){
+    throw httpError("Password must include uppercase, lowercase, number, and special character.");
+  }
+  return value;
+}
+
+function validateCustomerRegistration(payload){
+  const firstName = String(payload.firstName || payload.first_name || "").trim().replace(/\s+/g, " ");
+  const lastName = String(payload.lastName || payload.last_name || "").trim().replace(/\s+/g, " ");
+  const fallbackFullName = String(payload.fullName || payload.full_name || "").trim().replace(/\s+/g, " ");
+  const email = String(payload.email || "").trim().toLowerCase();
+  const address = String(payload.address || "").trim();
+  const password = validatePasswordComplexity(payload.password);
+  const contact = validatePhilippineContact(payload.contact);
+
+  if(!firstName || !lastName){
+    if(!fallbackFullName || fallbackFullName.split(/\s+/).length < 2){
+      throw httpError("First name and last name are required.");
+    }
+  }
+  if(!email || !address){
+    throw httpError("email and address are required.");
+  }
+
+  const fullName = firstName && lastName ? `${firstName} ${lastName}` : fallbackFullName;
+  return { firstName, lastName, fullName, email, contact, address, password };
 }
 
 function toUiOrder(order, items = [], events = []){
@@ -606,6 +653,19 @@ async function restockInventoryProductByName(payload){
     body: { stock_cases: nextStock, is_active: true }
   });
   return toInventoryProductRow(updated?.[0] || product);
+}
+
+async function deleteInventoryProductByName(name){
+  const product = await getProductByNameRaw(name);
+  if(!product){
+    const err = new Error("Product not found.");
+    err.status = 404;
+    throw err;
+  }
+  await supabaseRequest(`/rest/v1/products?id=eq.${product.id}`, {
+    method: "DELETE",
+    serviceRole: true
+  });
 }
 
 async function listProfiles(){
@@ -1145,6 +1205,14 @@ async function supabaseAdminDeleteUser(userId){
   });
 }
 
+async function supabaseAdminUpdateUserPassword(userId, password){
+  if(!userId) throw httpError("Missing user id.", 400);
+  await supabaseAdminRequest(`/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+    method: "PUT",
+    body: { password }
+  });
+}
+
 async function supabaseAuthUser(accessToken){
   if(!SUPABASE_URL || !SUPABASE_ANON_KEY){
     throw new Error("Missing Supabase frontend keys in .env");
@@ -1203,28 +1271,11 @@ async function upsertCustomerProfile({ userId, email, fullName, contact, address
 }
 
 async function registerCustomerAccount(payload){
-  const email = String(payload.email || "").trim().toLowerCase();
-  const password = String(payload.password || "");
-  const fullName = String(payload.fullName || payload.full_name || "").trim();
-  const contact = String(payload.contact || "").trim();
-  const address = String(payload.address || "").trim();
-
-  if(!email || !password || !fullName || !contact || !address){
-    const err = new Error("fullName, email, contact, address, and password are required");
-    err.status = 400;
-    throw err;
-  }
-  if(password.length < 8){
-    const err = new Error("Password must be at least 8 characters.");
-    err.status = 400;
-    throw err;
-  }
+  const { email, password, fullName, contact, address } = validateCustomerRegistration(payload);
 
   const existing = await getProfileByEmail(email);
   if(existing){
-    const err = new Error("An account with this email already exists.");
-    err.status = 409;
-    throw err;
+    throw httpError("An account with this email already exists.", 409);
   }
 
   const created = await supabaseAdminCreateUser({ email, password, fullName });
@@ -1254,6 +1305,20 @@ async function registerCustomerAccount(payload){
       expires_in: session.expires_in
     }
   };
+}
+
+async function changePasswordForProfile(profile, payload){
+  const currentPassword = String(payload.currentPassword || payload.current_password || "");
+  const newPassword = validatePasswordComplexity(payload.newPassword || payload.new_password);
+  if(!currentPassword){
+    throw httpError("Current password is required.");
+  }
+  if(currentPassword === newPassword){
+    throw httpError("New password must be different from the current password.");
+  }
+  await supabasePasswordLogin(profile.email, currentPassword);
+  await supabaseAdminUpdateUserPassword(profile.user_id, newPassword);
+  return { ok: true };
 }
 
 async function requireAuth(req, allowedRoles = []){
@@ -1423,7 +1488,7 @@ function uiStatusToDbStatus(status){
 
 async function createOrder(payload, authProfile){
   const customerName = String(payload.customerName || "").trim();
-  const contact = String(payload.contact || "").trim();
+  const contact = validatePhilippineContact(payload.contact);
   const address = String(payload.address || "").trim();
   const paymentMethod = String(payload.paymentMethod || "QRPH").trim();
   const rewardRedemptionId = String(payload.rewardRedemptionId || payload.reward_redemption_id || "").trim();
@@ -1573,8 +1638,8 @@ async function createOrder(payload, authProfile){
         name: it.name,
         quantity: 1
       })),
-      successUrl: `${APP_BASE_URL}/customer/customer-orders.html?paid=${encodeURIComponent(order.order_code)}`,
-      cancelUrl: `${APP_BASE_URL}/customer/customer-cart.html?cancelled=${encodeURIComponent(order.order_code)}`
+      successUrl: `${APP_BASE_URL}/customer-app/?paid=${encodeURIComponent(order.order_code)}#/orders`,
+      cancelUrl: `${APP_BASE_URL}/customer-app/?cancelled=${encodeURIComponent(order.order_code)}#/cart`
     });
     checkoutUrl = checkout?.attributes?.checkout_url || null;
     const checkoutSessionId = checkout?.id || null;
@@ -1927,12 +1992,21 @@ async function handleApi(req, res, url){
   if((req.method === "PUT" || req.method === "PATCH") && url.pathname === "/api/profile"){
     const auth = await requireAuth(req);
     const payload = await readJson(req);
+    const contact = validatePhilippineContact(payload.contact || auth.profile.contact || "");
     const profile = await updateProfileByEmail(auth.profile.email, {
       full_name: String(payload.fullName || payload.full_name || "").trim(),
-      contact: String(payload.contact || "").trim(),
+      contact,
       address: String(payload.address || "").trim()
     });
     sendJson(res, 200, { profile });
+    return true;
+  }
+
+  if(req.method === "POST" && url.pathname === "/api/auth/change-password"){
+    const auth = await requireAuth(req);
+    const payload = await readJson(req);
+    const result = await changePasswordForProfile(auth.profile, payload);
+    sendJson(res, 200, result);
     return true;
   }
 
@@ -2041,6 +2115,13 @@ async function handleApi(req, res, url){
     const payload = await readJson(req);
     const product = await updateInventoryProductByName(name, payload);
     sendJson(res, 200, { ok: true, product });
+    return true;
+  }
+  if(req.method === "DELETE" && url.pathname.startsWith("/api/panel/admin/inventory/products/by-name/")){
+    await requireAuth(req, ["admin"]);
+    const name = decodeURIComponent(url.pathname.replace("/api/panel/admin/inventory/products/by-name/", ""));
+    await deleteInventoryProductByName(name);
+    sendJson(res, 200, { ok: true });
     return true;
   }
   if(req.method === "POST" && url.pathname === "/api/panel/admin/inventory/restock"){
@@ -2169,5 +2250,12 @@ if(!process.env.VERCEL){
   });
 }
 
-export { PRODUCT_IMAGE_MAX_BYTES, handleRequest, parseProductImagePayload };
+export {
+  PRODUCT_IMAGE_MAX_BYTES,
+  handleRequest,
+  parseProductImagePayload,
+  validateCustomerRegistration,
+  validatePasswordComplexity,
+  validatePhilippineContact
+};
 export default handleRequest;

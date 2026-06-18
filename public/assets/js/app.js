@@ -85,13 +85,27 @@ function placeholderImage(label){
   return "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svg)));
 }
 
+function normalizeCategoryLabel(category, name = ""){
+  const raw = String(category || "").trim().toLowerCase().replace(/[-_]/g, " ").replace(/\s+/g, " ");
+  const text = `${raw} ${String(name || "").toLowerCase()}`;
+  if(raw === "softdrinks" || raw === "soft drink" || raw === "soft drinks") return "Soft Drinks";
+  if(raw === "energy" || raw === "energy drink" || raw === "energy drinks") return "Energy Drinks";
+  if(raw === "water") return "Water";
+  if(raw === "juice") return "Juice";
+  if(/water|wilkins|nature spring/.test(text)) return "Water";
+  if(/cobra|sting|gatorade|energy/.test(text)) return "Energy Drinks";
+  if(/juice|tea|c2|magnolia|zesto/.test(text)) return "Juice";
+  if(/coke|cola|sprite|royal|rc|root beer|soda|mountaindew|mountain dew/.test(text)) return "Soft Drinks";
+  return raw ? raw.replace(/\b\w/g, (m) => m.toUpperCase()) : "Other";
+}
+
 function normalizeProduct(p){
   return {
     id: p.id,
     dbId: p.dbId || p.db_id || null,
     sku: p.sku || p.id,
     name: p.name,
-    category: p.category,
+    category: normalizeCategoryLabel(p.category, p.name),
     unit: p.unit,
     price: Number(p.price || 0),
     stockCases: Number(p.stockCases ?? p.stock_cases ?? 0),
@@ -101,7 +115,7 @@ function normalizeProduct(p){
 
 function normalizeStatusLabel(status){
   const map = {
-    pending_payment: "Order Placed",
+    pending_payment: "Pending Payment",
     order_placed: "Order Placed",
     preparing: "Preparing",
     in_transit: "In Transit",
@@ -112,13 +126,34 @@ function normalizeStatusLabel(status){
   return map[status] || status || "Order Placed";
 }
 
+function redirectLegacyCustomerPage(){
+  const page = String(location.pathname.split("/").pop() || "");
+  const routeMap = {
+    "customer-dashboard.html": "#/dashboard",
+    "customer-shop.html": "#/shop",
+    "customer-orders.html": "#/orders",
+    "customer-cart.html": "#/cart",
+    "customer-rewards.html": "#/rewards",
+    "customer-profile.html": "#/profile",
+    "customer-order-details.html": "#/orders"
+  };
+  const targetRoute = routeMap[page];
+  if(!targetRoute) return false;
+
+  const search = location.search || "";
+  const target = `/customer-app/${search}${targetRoute}`;
+  location.replace(target);
+  return true;
+}
+
 function currentStatusIndex(status){
   const map = {
-    "Order Placed": 0,
-    "Preparing": 1,
-    "In Transit": 2,
-    "Out for Delivery": 3,
-    "Delivered": 4,
+    "Pending Payment": 0,
+    "Order Placed": 1,
+    "Preparing": 2,
+    "In Transit": 3,
+    "Out for Delivery": 4,
+    "Delivered": 5,
     "Cancelled": 0
   };
   return map[status] ?? 0;
@@ -133,7 +168,8 @@ function nowStamp(){
 
 function buildTimeline(status, statusEvents){
   const defaults = [
-    {title:"Order Placed", note:"Customer placed the order successfully."},
+    {title:"Pending Payment", note:"Checkout started. Waiting for payment confirmation."},
+    {title:"Order Placed", note:"Payment confirmed and order received."},
     {title:"Preparing", note:"Order will be packed and checked by staff."},
     {title:"In Transit", note:"Order is on the way to customer location."},
     {title:"Out for Delivery", note:"Rider is near the destination."},
@@ -284,11 +320,12 @@ function productCardMarkup(p, { favorite=false, compact=false } = {}){
       </div>
       <div class="productBody">
         <div class="productTop">
-          <p class="productName">${p.name}</p>
           <button class="btn back favoriteBtn ${favorite ? "is-favorite" : ""}" type="button" data-favorite="${p.id}">${favText}</button>
         </div>
-        <p class="productMeta">${p.category} - ${p.unit} - ${stockLabel}</p>
+        <p class="productName">${p.name}</p>
         <p class="productPrice">${money(p.price)}</p>
+        <p class="productMeta">${p.category} - ${p.unit}</p>
+        <p class="productDesc">${stockLabel}</p>
         <div class="productActions">
           ${packSelector}
           <button class="btn" data-add="${p.id}" ${disabled}>Add to Cart</button>
@@ -317,7 +354,8 @@ function bindProductCardActions(scope = document){
       const selected = packSelect?.selectedOptions?.[0];
       const caseQty = Number(packSelect?.value || 1);
       const packLabel = selected?.dataset?.packLabel || "1 case";
-      addToCart(btn.dataset.add, 1, { caseQty, packLabel });
+      const added = addToCart(btn.dataset.add, 1, { caseQty, packLabel });
+      if(!added) return;
       setCartBadge();
       btn.textContent = "Added";
       setTimeout(()=>btn.textContent="Add to Cart", 900);
@@ -334,12 +372,20 @@ function bindProductCardActions(scope = document){
 
 function addToCart(productId, qty=1, pack = {}){
   const cart = getCart();
+  const product = getProducts().find(p => p.id === productId);
   const caseQty = Number(pack.caseQty || 1);
   const packLabel = String(pack.packLabel || "1 case");
   const found = cart.find(i => i.productId === productId && Number(i.caseQty || 1) === caseQty);
+  const currentCases = found ? Number(found.qty || 0) * Number(found.caseQty || 1) : 0;
+  const nextCases = currentCases + (Number(qty || 0) * caseQty);
+  if(product && nextCases > Number(product.stockCases || 0)){
+    alert(`Only ${formatQty(product.stockCases)} case(s) available for ${product.name}.`);
+    return false;
+  }
   if(found) found.qty += qty;
   else cart.push({productId, qty, caseQty, packLabel});
   setCart(cart);
+  return true;
 }
 
 function cartCount(){
@@ -381,6 +427,16 @@ function setCartBadge(){
 function initPublicNav(){
   setCartBadge();
   qsa("[data-back]").forEach(btn => btn.addEventListener("click", ()=>history.back()));
+  qsa("[data-logout], a").forEach((el) => {
+    const text = (el.textContent || "").trim().toLowerCase();
+    if(!el.matches("[data-logout]") && text !== "log out") return;
+    el.addEventListener("click", () => {
+      localStorage.removeItem("jazjo_user");
+      localStorage.removeItem("jazjo_role");
+      localStorage.removeItem("jazjo_access_token");
+      sessionStorage.removeItem("jazjo_access_token");
+    });
+  });
 }
 
 function renderShop(){
@@ -392,15 +448,35 @@ function renderShop(){
   let latestOrders = getOrders();
   const search = qs("#search");
   const cat = qs("#category");
+  const categoryHost = qs("#categoryOptions") || (() => {
+    const host = document.createElement("div");
+    host.id = "categoryOptions";
+    host.className = "categoryOptions";
+    grid.insertAdjacentElement("beforebegin", host);
+    return host;
+  })();
   const favoritesWrap = qs("#favoritesGrid");
   const recommendationsWrap = qs("#recommendGrid");
   const favoritesCard = qs("#favoritesCard");
   const recommendationsCard = qs("#recommendCard");
 
   const draw = ()=>{
-    const categories = ["All", ...new Set(products.map(p=>p.category))];
+    const preferred = ["Soft Drinks", "Water", "Energy Drinks", "Juice"];
+    const fromProducts = [...new Set(products.map(p=>p.category).filter(Boolean))];
+    const categories = ["All", ...preferred, ...fromProducts.filter(c => !preferred.includes(c))];
     cat.innerHTML = categories.map(c=>`<option value="${c}">${c}</option>`).join("");
     if(!categories.includes(cat.value)) cat.value = "All";
+    categoryHost.innerHTML = preferred.map((c) => `
+      <button class="categoryTile ${cat.value === c ? "active" : ""}" type="button" data-category-choice="${c}">
+        <span>${c}</span>
+      </button>
+    `).join("");
+    qsa("[data-category-choice]", categoryHost).forEach((btn) => {
+      btn.onclick = () => {
+        cat.value = btn.dataset.categoryChoice;
+        draw();
+      };
+    });
 
     const term = (search.value || "").toLowerCase();
     const selected = cat.value || "All";
@@ -433,6 +509,12 @@ function renderShop(){
 
   window.__jazjoRefreshProducts = draw;
   search.addEventListener("input", draw);
+  search.addEventListener("keydown", (e) => {
+    if(e.key === "Enter"){
+      e.preventDefault();
+      draw();
+    }
+  });
   cat.addEventListener("change", draw);
   draw();
   syncProductsFromApi()
@@ -569,6 +651,12 @@ function renderCart(){
     const cart = getCart();
     const it = cart.find(i=>getCartLineKey(i)===lineKey);
     if(!it) return;
+    const product = getProducts().find(p => p.id === it.productId);
+    const nextCases = (Number(it.qty || 0) + delta) * Number(it.caseQty || 1);
+    if(delta > 0 && product && nextCases > Number(product.stockCases || 0)){
+      alert(`Only ${formatQty(product.stockCases)} case(s) available for ${product.name}.`);
+      return;
+    }
     it.qty += delta;
     if(it.qty<=0) cart.splice(cart.indexOf(it),1);
     setCart(cart);
@@ -624,17 +712,18 @@ function renderCart(){
     const existingOrders = getOrders().filter(o => o.id !== createdOrder.id);
     setOrders([createdOrder, ...existingOrders]);
 
-    setCart([]);
-    setCartBadge();
     if(rewardRedemptionId){
       setRewardPrefs({ selectedRedemptionId: "" });
       await refreshRewards();
     }
     if(checkoutUrl){
+      sessionStorage.setItem("jazjo_pending_checkout_order", createdOrder.id);
       window.location.href = checkoutUrl;
       return;
     }
-    window.location.href = `customer-orders.html?new=${encodeURIComponent(createdOrder.id)}`;
+    setCart([]);
+    setCartBadge();
+    window.location.href = "/customer-app/#/orders";
   });
 
   draw();
@@ -742,6 +831,11 @@ function renderOrders(){
     .then(() => fetchOrdersFromApi())
     .then(orders => {
       setOrders(orders);
+      if(paidOrderCode){
+        setCart([]);
+        setCartBadge();
+        sessionStorage.removeItem("jazjo_pending_checkout_order");
+      }
       draw(orders);
       if(paidOrderCode){
         const nextUrl = new URL(location.href);
@@ -765,7 +859,7 @@ function renderOrderDetails(){
 
   const draw = (order)=>{
     if(!order){
-      box.innerHTML = `<div class="card"><div class="small">Order not found. Go back to <a href="customer-orders.html" style="color:#16a34a;font-weight:900">Orders</a>.</div></div>`;
+      box.innerHTML = `<div class="card"><div class="small">Order not found. Go back to <a href="/customer-app/#/orders" style="color:#16a34a;font-weight:900">Orders</a>.</div></div>`;
       return;
     }
 
@@ -776,7 +870,7 @@ function renderOrderDetails(){
           <p>${order.id} - ${order.createdAt}</p>
         </div>
         <div class="row">
-          <a class="btn back" href="customer-orders.html">Back to Orders</a>
+          <a class="btn back" href="/customer-app/#/orders">Back to Orders</a>
           <button class="btn back" data-back>Back</button>
         </div>
       </div>
@@ -941,33 +1035,67 @@ function renderRewards(){
 function renderProfile(){
   initPublicNav();
   const form = qs("#profileForm");
-  if(!form) return;
+  const passwordForm = qs("#passwordForm");
+  if(!form && !passwordForm) return;
 
-  apiFetch("/api/profile")
-    .then(({profile}) => {
-      qs("#pname").value = profile.full_name || "";
-      qs("#pemail").value = profile.email || "";
-      qs("#pcontact").value = profile.contact || "";
-      qs("#paddress").value = profile.address || "";
-    })
-    .catch(err => {
-      console.error(err);
-      alert(`Failed to load profile from database: ${err.message}`);
-    });
-
-  form.addEventListener("submit",(e)=>{
-    e.preventDefault();
-    apiFetch("/api/profile", {
-      method: "PUT",
-      body: JSON.stringify({
-        fullName: qs("#pname").value.trim(),
-        contact: qs("#pcontact").value.trim(),
-        address: qs("#paddress").value.trim()
+  if(form){
+    apiFetch("/api/profile")
+      .then(({profile}) => {
+        qs("#pname").value = profile.full_name || "";
+        qs("#pemail").value = profile.email || "";
+        qs("#pcontact").value = profile.contact || "";
+        qs("#paddress").value = profile.address || "";
       })
-    })
-      .then(() => alert("Profile saved."))
-      .catch(err => alert(`Failed to save profile: ${err.message}`));
-  });
+      .catch(err => {
+        console.error(err);
+        alert(`Failed to load profile from database: ${err.message}`);
+      });
+
+    form.addEventListener("submit",(e)=>{
+      e.preventDefault();
+      const contact = qs("#pcontact").value.trim();
+      if(!/^09\d{9}$/.test(contact)){
+        alert("Contact number must be numeric and follow Philippine format: 09xxxxxxxxx.");
+        return;
+      }
+      apiFetch("/api/profile", {
+        method: "PUT",
+        body: JSON.stringify({
+          fullName: qs("#pname").value.trim(),
+          contact,
+          address: qs("#paddress").value.trim()
+        })
+      })
+        .then(() => alert("Profile saved."))
+        .catch(err => alert(`Failed to save profile: ${err.message}`));
+    });
+  }
+
+  if(passwordForm){
+    passwordForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const currentPassword = qs("#currentPassword").value || "";
+      const newPassword = qs("#newPassword").value || "";
+      const confirmNewPassword = qs("#confirmNewPassword").value || "";
+      if(newPassword !== confirmNewPassword){
+        alert("New passwords do not match.");
+        return;
+      }
+      if(!/[A-Z]/.test(newPassword) || !/[a-z]/.test(newPassword) || !/\d/.test(newPassword) || !/[^A-Za-z0-9]/.test(newPassword)){
+        alert("Password must include uppercase, lowercase, number, and special character.");
+        return;
+      }
+      apiFetch("/api/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword })
+      })
+        .then(() => {
+          alert("Password updated. Please use it on your next login.");
+          passwordForm.reset();
+        })
+        .catch(err => alert(`Failed to update password: ${err.message}`));
+    });
+  }
 }
 
 function initProductUploader(){
@@ -994,6 +1122,7 @@ function initProductUploader(){
 }
 
 document.addEventListener("DOMContentLoaded", ()=>{
+  if(redirectLegacyCustomerPage()) return;
   initPublicNav();
   if(qs("#dashboardFavorites") || qs("#dashboardRecommendations")) renderCustomerDashboard();
   if(qs("#productGrid")) renderShop();

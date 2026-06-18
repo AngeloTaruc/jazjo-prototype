@@ -83,7 +83,7 @@
 
   function statusText(status) {
     const map = {
-      pending_payment: "Order Placed",
+      pending_payment: "Pending Payment",
       order_placed: "Order Placed",
       preparing: "Preparing",
       in_transit: "In Transit",
@@ -114,9 +114,9 @@
   function setButtonGroupActive(buttons, activeBtn) {
     buttons.forEach((btn) => {
       const isActive = btn === activeBtn;
-      btn.style.background = isActive ? "rgba(22,163,74,.12)" : "#fff";
-      btn.style.borderColor = isActive ? "rgba(22,163,74,.35)" : "rgba(229,231,235,.9)";
-      btn.style.color = isActive ? "#0b7a33" : "#0f172a";
+      btn.style.background = isActive ? "rgba(49,208,125,.14)" : "#0c1220";
+      btn.style.borderColor = isActive ? "rgba(49,208,125,.45)" : "#263247";
+      btn.style.color = isActive ? "#31d07d" : "#f8fafc";
     });
   }
 
@@ -715,9 +715,17 @@
 
     const redeemButtons = [...document.querySelectorAll(".redeem")];
     const rewardTypes = ["free_delivery", "discount_10"];
+    const rewardCosts = [500, 1000];
     redeemButtons.forEach((btn, idx) => {
-      btn.addEventListener("click", async () => {
+      const cost = rewardCosts[idx] || 500;
+      btn.disabled = !top || Number(top.points || 0) < cost;
+      btn.style.opacity = btn.disabled ? ".6" : "1";
+      btn.title = btn.disabled ? "No customer currently has enough points for this reward." : "";
+      btn.onclick = async () => {
         const email = prompt("Customer email to redeem for (leave blank = top customer):", "") || "";
+        const oldText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Redeeming...";
         try {
           const result = await apiPost("/api/panel/admin/rewards/redeem", {
             rewardType: rewardTypes[idx] || "free_delivery",
@@ -727,8 +735,10 @@
           await renderAdminRewards();
         } catch (err) {
           alert(`Redeem failed: ${err.message}`);
+          btn.disabled = false;
+          btn.textContent = oldText;
         }
-      });
+      };
     });
   }
 

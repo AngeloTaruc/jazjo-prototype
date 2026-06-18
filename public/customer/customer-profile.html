@@ -12,11 +12,11 @@
     <div class="navInner">
       <div class="brand"><div class="logoDot">J</div><div>Jazjo Beverage</div></div>
       <div class="navLinks">
-        <a href="customer-dashboard.html">Home</a>
-        <a href="customer-shop.html">Shop</a>
-        <a href="customer-orders.html">Orders</a>
-        <a href="customer-rewards.html">Rewards</a>
-        <a class="btn back" href="customer-cart.html">Cart (<span data-cart-count>0</span>)</a>
+        <a href="/customer-app/#/dashboard">Home</a>
+        <a href="/customer-app/#/shop">Shop</a>
+        <a href="/customer-app/#/orders">Orders</a>
+        <a href="/customer-app/#/rewards">Rewards</a>
+        <a class="btn back" href="/customer-app/#/cart">Cart (<span data-cart-count>0</span>)</a>
         <a class="btn" href="../index.html">Log Out</a>
       </div>
     </div>
@@ -43,7 +43,7 @@
         </div>
         <div>
           <label class="small">Contact</label>
-          <input id="pcontact" class="input" required />
+          <input id="pcontact" class="input" type="tel" inputmode="numeric" pattern="09[0-9]{9}" maxlength="11" required />
         </div>
         <div>
           <label class="small">Address</label>
@@ -52,6 +52,30 @@
 
         <div style="grid-column:1/-1">
           <button class="btn" type="submit">Save Profile</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <form id="passwordForm" class="grid grid2">
+        <div style="grid-column:1/-1">
+          <div style="font-weight:1200;font-size:18px">Change Password</div>
+          <div class="small">Use at least 8 characters with uppercase, lowercase, number, and special character.</div>
+        </div>
+        <div>
+          <label class="small">Current Password</label>
+          <input id="currentPassword" class="input" type="password" required />
+        </div>
+        <div>
+          <label class="small">New Password</label>
+          <input id="newPassword" class="input" type="password" minlength="8" required />
+        </div>
+        <div>
+          <label class="small">Confirm New Password</label>
+          <input id="confirmNewPassword" class="input" type="password" minlength="8" required />
+        </div>
+        <div style="align-self:end">
+          <button class="btn" type="submit">Update Password</button>
         </div>
       </form>
     </div>

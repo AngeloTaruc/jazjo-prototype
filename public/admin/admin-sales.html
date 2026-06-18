@@ -8,18 +8,18 @@
   <style>
     .row{display:grid;grid-template-columns:1.2fr .8fr;gap:14px;margin-top:14px}
     .pilltabs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-    .tab{padding:10px 14px;border-radius:999px;border:1px solid rgba(229,231,235,.9);background:#fff;font-weight:900;cursor:pointer}
-    .tab.active{background:rgba(22,163,74,.12);border-color:rgba(22,163,74,.35);color:#0b7a33}
+    .tab{padding:10px 14px;border-radius:14px;border:1px solid var(--line);background:#0c1220;color:var(--text);font-weight:900;cursor:pointer}
+    .tab.active{background:rgba(49,208,125,.14);border-color:rgba(49,208,125,.45);color:var(--green)}
     .chart{
-      margin-top:12px;border:1px solid rgba(229,231,235,.9);border-radius:18px;padding:14px;background:#fff;
+      margin-top:12px;border:1px solid var(--line);border-radius:16px;padding:14px;background:var(--card);
     }
     .bars{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;align-items:end;height:180px;margin-top:10px}
     .bar{border-radius:14px;background:rgba(22,163,74,.18);border:1px solid rgba(22,163,74,.28);position:relative;min-height:22px}
-    .bar span{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);font-size:12px;font-weight:900;color:#0f172a;margin-bottom:6px;white-space:nowrap}
-    .bar small{position:absolute;top:100%;left:50%;transform:translateX(-50%);font-size:12px;font-weight:800;color:#64748b;margin-top:6px}
+    .bar span{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);font-size:12px;font-weight:900;color:var(--text);margin-bottom:6px;white-space:nowrap}
+    .bar small{position:absolute;top:100%;left:50%;transform:translateX(-50%);font-size:12px;font-weight:800;color:var(--muted);margin-top:6px}
     .kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:12px}
-    .kpi2{border:1px solid rgba(229,231,235,.9);border-radius:18px;padding:14px;background:#fff}
-    .kpi2 .label{color:#64748b;font-weight:900;font-size:12px}
+    .kpi2{border:1px solid var(--line);border-radius:16px;padding:14px;background:var(--card)}
+    .kpi2 .label{color:var(--muted);font-weight:900;font-size:12px}
     .kpi2 .value{margin-top:8px;font-weight:1100;font-size:24px}
     @media(max-width:900px){.row{grid-template-columns:1fr}}
   </style>

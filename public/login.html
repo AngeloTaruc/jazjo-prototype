@@ -271,6 +271,22 @@
       .card{grid-template-columns: 1fr;}
       .left{min-height: 260px;}
     }
+    body{
+      background:
+        linear-gradient(135deg, rgba(22,163,74,.12), transparent 30%),
+        linear-gradient(315deg, rgba(96,165,250,.10), transparent 32%),
+        #090d14;
+      color:#f8fafc;
+    }
+    .nav{background:rgba(7,11,18,.92);border-bottom-color:#263247}
+    .nav-links{color:#a9b5c7}
+    .nav-links a:hover{background:rgba(255,255,255,.06);color:#f8fafc}
+    .card{background:#111827;border-color:#263247;border-radius:16px}
+    .right .sub,.row{color:#a9b5c7}
+    label{color:#dbe7f5}
+    .input{background:#0c1220;border-color:#263247;color:#f8fafc}
+    .btn-ghost,.toggle{background:#1a2436;color:#f8fafc;border:1px solid #263247}
+    .back{color:#f8fafc}
   </style>
 </head>
 
@@ -333,10 +349,6 @@
             </div>
           </div>
 
-          <div class="row">
-            <a href="#" onclick="return false;" title="Not included in prototype">Forgot password?</a>
-          </div>
-
           <div class="actions">
             <button class="btn btn-primary" type="submit">Continue</button>
             <a class="btn btn-ghost" href="index.html">Cancel</a>
@@ -366,9 +378,9 @@
     }
 
     function routeByRole(role) {
-      if (role === "admin") return "admin/admin-dashboard.html";
-      if (role === "staff") return "staff/staff-dashboard.html";
-      return "customer/customer-dashboard.html";
+      if (role === "admin") return "/customer-app/#/admin/dashboard";
+      if (role === "staff") return "/customer-app/#/staff/dashboard";
+      return "/customer-app/#/home";
     }
 
     togglePw.addEventListener("click", () => {

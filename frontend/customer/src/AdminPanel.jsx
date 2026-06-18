@@ -1,0 +1,1320 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Button } from "@heroui/react/button";
+import { Card } from "@heroui/react/card";
+import { Chip } from "@heroui/react/chip";
+import { Input as HeroInput } from "@heroui/react/input";
+import { Modal } from "@heroui/react/modal";
+import { Pagination } from "@heroui/react/pagination";
+import { Skeleton } from "@heroui/react/skeleton";
+import { Tabs } from "@heroui/react/tabs";
+import { Toast } from "@heroui/react/toast";
+import { Tooltip } from "@heroui/react/tooltip";
+import {
+  BarChart3,
+  Box,
+  CreditCard,
+  Gift,
+  Home,
+  LogOut,
+  Moon,
+  Package,
+  Search,
+  ShoppingCart,
+  Sun,
+  Truck,
+  TrendingUp,
+  Users,
+  User,
+  Plus,
+  RefreshCw,
+  Eye,
+  Sparkles,
+  Trash2,
+  Warehouse
+} from "lucide-react";
+import {
+  apiAdminDashboard,
+  apiAdminOrders,
+  apiAdminInventory,
+  apiAdminCustomers,
+  apiAdminRewards,
+  apiAdminSales,
+  apiAdminReports,
+  apiAdminDelivery,
+  apiAdminCategories,
+  apiAdminCreateCategory,
+  apiAdminCreateProduct,
+  apiAdminUploadProductImage,
+  apiAdminRestock,
+  apiAdminUpdateProduct,
+  apiAdminDeleteProduct,
+  apiAdminRedeemReward,
+  apiUpdateOrderStatus
+} from "./lib/api.js";
+import { clearSession, formatQty, getToken, money, statusLabel } from "./lib/customerLogic.js";
+
+const CardHeader = Card.Header;
+const CardBody = Card.Content;
+const BRAND_LOGO = "/customer-app/logo.png";
+
+const pageVariants = {
+  initial: { opacity: 0, y: 16 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -16 }
+};
+
+function go(route) {
+  window.location.hash = `#/${route}`;
+}
+
+function routeFromHash() {
+  return window.location.hash.replace(/^#\/?/, "") || "admin/dashboard";
+}
+
+function THead({ children }) {
+  return <thead><tr className="border-b border-white/10 text-xs font-bold uppercase tracking-wider text-slate-500">{children}</tr></thead>;
+}
+
+function TBody({ children }) {
+  return <tbody>{children}</tbody>;
+}
+
+function Th({ children }) {
+  return <th className="px-3 py-3">{children}</th>;
+}
+
+function Tr({ children }) {
+  return <tr className="border-b border-white/5 transition-colors hover:bg-white/[.02]">{children}</tr>;
+}
+
+function Td({ children, className = "" }) {
+  return <td className={`px-3 py-3 ${className}`}>{children}</td>;
+}
+
+function Table({ children }) {
+  return <table className="w-full text-left text-sm">{children}</table>;
+}
+
+export default function AdminPanel({ isDark, onToggleTheme }) {
+  const [route, setRoute] = useState(() => routeFromHash().replace("admin/", ""));
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    const onHash = () => {
+      const r = routeFromHash().replace("admin/", "");
+      setRoute(r || "dashboard");
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  useEffect(() => {
+    if (!message) return;
+    Toast.toast[message.startsWith("Error") || message.includes("failed") || message.includes("missing") ? "danger" : "success"](message, { timeout: 3000 });
+    setMessage("");
+  }, [message]);
+
+  if (!getToken()) {
+    window.location.hash = "#/home";
+    return null;
+  }
+
+  const navigate = (r) => go(`admin/${r}`);
+
+  const sidebarItems = [
+    { id: "dashboard", label: "Dashboard", icon: <Home size={18} /> },
+    { id: "sales", label: "Sales", icon: <TrendingUp size={18} /> },
+    { id: "inventory", label: "Inventory", icon: <Warehouse size={18} /> },
+    { id: "orders", label: "Orders", icon: <Package size={18} /> },
+    { id: "delivery", label: "Delivery", icon: <Truck size={18} /> },
+    { id: "customers", label: "Customers", icon: <Users size={18} /> },
+    { id: "rewards", label: "Rewards", icon: <Gift size={18} /> },
+    { id: "reports", label: "Reports", icon: <BarChart3 size={18} /> }
+  ];
+
+  return (
+    <div className={`flex min-h-screen transition-colors ${isDark ? "bg-[#080b12] text-slate-100" : "bg-slate-50 text-slate-950"}`}>
+      <Toast.Provider placement="top end" maxVisibleToasts={4} />
+      <aside className={`fixed left-0 top-0 z-30 h-full w-56 border-r transition-colors max-md:hidden ${isDark ? "border-white/10 bg-[#0c101a]" : "border-slate-200 bg-white"}`}>
+        <div className="flex h-full flex-col">
+          <div className="flex items-center gap-2 border-b border-white/10 px-4 py-5">
+            <img alt="Jazjo Beverages" className="h-10 w-10 rounded-xl bg-white p-1 object-contain" src={BRAND_LOGO} />
+            <div>
+              <p className={`text-sm font-black ${isDark ? "text-white" : "text-slate-950"}`}>Admin Panel</p>
+              <p className="text-[10px] text-slate-500">Jazjo Beverages</p>
+            </div>
+          </div>
+          <nav className="flex-1 space-y-1 overflow-y-auto p-3">
+            {sidebarItems.map((item) => (
+              <Button
+                key={item.id}
+                fullWidth
+                className={`justify-start gap-3 rounded-xl px-3 py-6 text-sm font-semibold transition-all ${
+                  route === item.id
+                    ? "bg-emerald-500/15 text-emerald-300 shadow-sm shadow-emerald-950/30"
+                    : isDark ? "text-slate-400 hover:bg-white/5 hover:text-white" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+                }`}
+                variant="light"
+                startContent={item.icon}
+                onPress={() => navigate(item.id)}
+              >
+                {item.label}
+              </Button>
+            ))}
+          </nav>
+          <div className="border-t border-white/10 p-3">
+            <Button
+              fullWidth
+              variant="light"
+              className="justify-start gap-3 rounded-xl px-3 py-6 text-sm font-semibold text-red-400 hover:bg-red-500/10"
+              startContent={<LogOut size={18} />}
+              onPress={() => { clearSession(); go("home"); }}
+            >
+              Log Out
+            </Button>
+          </div>
+        </div>
+      </aside>
+      <div className="flex flex-1 flex-col max-md:ml-0 md:ml-56">
+        <header className={`sticky top-0 z-20 flex items-center justify-between border-b px-4 py-3 backdrop-blur-xl transition-colors ${
+          isDark ? "border-white/10 bg-[#080b12]/85" : "border-slate-200 bg-white/85"
+        }`}>
+          <div className="flex items-center gap-3">
+            <h1 className={`text-lg font-black max-md:hidden ${isDark ? "text-white" : "text-slate-950"}`}>
+              {sidebarItems.find((item) => item.id === route)?.label || "Dashboard"}
+            </h1>
+            <div className="flex gap-1 md:hidden">
+              {sidebarItems.map((item) => (
+                <Button
+                  key={item.id}
+                  size="sm"
+                  variant={route === item.id ? "flat" : "light"}
+                  color={route === item.id ? "success" : "default"}
+                  isIconOnly
+                  onPress={() => navigate(item.id)}
+                >
+                  {item.icon}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="light" isIconOnly onPress={onToggleTheme}>
+              {isDark ? <Sun size={16} /> : <Moon size={16} />}
+            </Button>
+            <Button size="sm" variant="light" startContent={<User size={14} />} onPress={() => go("profile")}>
+              Profile
+            </Button>
+          </div>
+        </header>
+        <main className="flex-1 p-4 lg:p-6">
+          <AnimatePresence mode="wait">
+            <motion.div key={route} variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
+              {route === "dashboard" && <AdminDashboardPage setMessage={setMessage} />}
+              {route === "sales" && <AdminSalesPage setMessage={setMessage} />}
+              {route === "inventory" && <AdminInventoryPage setMessage={setMessage} />}
+              {route === "orders" && <AdminOrdersPage setMessage={setMessage} />}
+              {route === "delivery" && <AdminDeliveryPage setMessage={setMessage} />}
+              {route === "customers" && <AdminCustomersPage setMessage={setMessage} />}
+              {route === "rewards" && <AdminRewardsPage setMessage={setMessage} />}
+              {route === "reports" && <AdminReportsPage setMessage={setMessage} />}
+            </motion.div>
+          </AnimatePresence>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function AdminDashboardPage({ setMessage }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await apiAdminDashboard();
+      setData(result);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  if (loading) {
+    return (
+      <div className="space-y-5">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {[1,2,3,4].map((i) => <Card key={i}><CardBody className="space-y-2"><Skeleton className="h-4 w-20" /><Skeleton className="h-8 w-28" /></CardBody></Card>)}
+        </div>
+        <Card><CardBody className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}</CardBody></Card>
+      </div>
+    );
+  }
+  const kpis = data?.kpis || {};
+  const recentOrders = data?.recentOrders || [];
+  return (
+    <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiCard label="Total Sales" value={money(kpis.totalSales)} icon={<TrendingUp size={20} />} />
+        <KpiCard label="Transactions" value={kpis.transactions || 0} icon={<ShoppingCart size={20} />} />
+        <KpiCard label="Best Seller" value={kpis.bestSeller || "N/A"} icon={<BarChart3 size={20} />} />
+        <KpiCard label="Low Stock" value={kpis.lowStockCount || 0} icon={<Warehouse size={20} />} />
+      </div>
+      <Card>
+        <CardHeader><h2 className="text-lg font-black">Recent Orders</h2></CardHeader>
+        <CardBody>
+          {recentOrders.length === 0 ? (
+            <p className="text-sm text-slate-400">No orders yet.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <THead><Th>ORDER ID</Th><Th>CUSTOMER</Th><Th>TOTAL</Th><Th>STATUS</Th></THead>
+                <TBody>
+                  {recentOrders.map((order, idx) => (
+                    <Tr key={order.id || idx}>
+                      <Td><span className="font-semibold">{order.id}</span></Td>
+                      <Td>{order.customerName || "Customer"}</Td>
+                      <Td>{money(order.total)}</Td>
+                      <Td><Chip color={order.status === "Delivered" ? "success" : order.status === "Cancelled" ? "danger" : "warning"} variant="flat" size="sm">{statusLabel(order.status)}</Chip></Td>
+                    </Tr>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+    </motion.div>
+  );
+}
+
+function AdminSalesPage({ setMessage }) {
+  const [data, setData] = useState(null);
+  const [tab, setTab] = useState("daily");
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await apiAdminSales();
+      setData(result);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  if (loading) {
+    return (
+      <div className="space-y-5">
+        <div className="grid gap-4 sm:grid-cols-4">
+          {[1,2,3,4,5].map((i) => <Card key={i}><CardBody className="space-y-2"><Skeleton className="h-4 w-16" /><Skeleton className="h-7 w-24" /></CardBody></Card>)}
+        </div>
+      </div>
+    );
+  }
+  const kpis = data?.kpis || {};
+  const chart = data?.chart || {};
+  const rows = data?.rows || [];
+  return (
+    <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="grid gap-4 sm:grid-cols-5">
+        <KpiCard label="Today's Sales" value={money(kpis.todaySales)} icon={<TrendingUp size={18} />} />
+        <KpiCard label="Transactions" value={kpis.transactions || 0} icon={<ShoppingCart size={18} />} />
+        <KpiCard label="Best Seller" value={kpis.bestSeller || "N/A"} icon={<BarChart3 size={18} />} />
+        <KpiCard label="Refunds" value={kpis.refunds || 0} icon={<CreditCard size={18} />} />
+        <KpiCard label="Avg Order" value={money(kpis.avgOrderValue)} icon={<Box size={18} />} />
+      </div>
+      {chart.points?.length > 0 ? (
+        <Card>
+          <CardHeader><h2 className="text-lg font-black">{chart.title || "Sales Trend"}</h2></CardHeader>
+          <CardBody>
+            <div className="flex items-end gap-2" style={{ height: 160 }}>
+              {chart.points.map((p, idx) => {
+                const max = Math.max(...chart.points.map((x) => x.sales), 1);
+                const h = (p.sales / max) * 100;
+                return (
+                  <Tooltip key={p.key || idx} content={`${p.label}: ${money(p.sales)}`} placement="top" showArrow>
+                    <div className="flex flex-1 flex-col items-center gap-1">
+                      <div className="w-full rounded-t-md bg-emerald-500/60 transition-all hover:bg-emerald-400" style={{ height: `${Math.max(h, 4)}%` }} />
+                      <span className="text-[10px] text-slate-500">{p.label}</span>
+                    </div>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
+      <Card>
+        <CardHeader><h2 className="text-lg font-black">Sales Summary</h2></CardHeader>
+        <CardBody>
+          {rows.length === 0 ? (
+            <p className="text-sm text-slate-400">No data available.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <THead><Th>PERIOD</Th><Th>SALES</Th><Th>TRANSACTIONS</Th><Th>BEST SELLER</Th></THead>
+                <TBody>
+                  {rows.map((row, idx) => (
+                    <Tr key={idx}>
+                      <Td><span className="font-semibold">{row.period}</span></Td>
+                      <Td>{money(row.sales)}</Td>
+                      <Td>{row.transactions}</Td>
+                      <Td>{row.bestSeller || "N/A"}</Td>
+                    </Tr>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+    </motion.div>
+  );
+}
+
+function AdminOrdersPage({ setMessage }) {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("All");
+  const [page, setPage] = useState(1);
+  const perPage = 10;
+  const statuses = ["All", "Pending Payment", "Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered", "Cancelled"];
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await apiAdminOrders();
+      setOrders(result.orders || []);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const filtered = useMemo(() => {
+    if (filter === "All") return orders;
+    return orders.filter((o) => statusLabel(o.status) === filter);
+  }, [orders, filter]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
+  const safePage = Math.min(page, totalPages);
+  const paged = filtered.slice((safePage - 1) * perPage, safePage * perPage);
+  useEffect(() => { setPage(1); }, [filter]);
+  const updateStatus = async (orderCode, newStatus) => {
+    try {
+      await apiUpdateOrderStatus(orderCode, newStatus);
+      setMessage(`Order ${orderCode} marked as ${newStatus}.`);
+      load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+  const nextStatus = (current) => {
+    const label = statusLabel(current);
+    const map = {
+      "Order Placed": "Preparing",
+      "Preparing": "In Transit",
+      "In Transit": "Out for Delivery",
+      "Out for Delivery": "Delivered"
+    };
+    return map[label] || null;
+  };
+  return (
+    <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <Card>
+        <CardBody className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-black">Order Management</h2>
+          <Button size="sm" variant="flat" startContent={<RefreshCw size={14} />} onPress={load}>Refresh</Button>
+        </CardBody>
+      </Card>
+      <Tabs selectedKey={filter} onSelectionChange={(key) => setFilter(String(key))} color="success" variant="underlined" size="sm">
+        <Tabs.List className="gap-0 overflow-x-auto border-b border-white/10">
+          {statuses.map((s) => (
+            <Tabs.Tab id={s} key={s} className="min-w-max px-3 py-2 data-[selected=true]:text-emerald-400">
+              <span className="text-xs">{s}</span>
+            </Tabs.Tab>
+          ))}
+        </Tabs.List>
+      </Tabs>
+      {loading ? (
+        <Card><CardBody className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}</CardBody></Card>
+      ) : paged.length === 0 ? (
+        <Card><CardBody><p className="text-sm text-slate-400">No orders found.</p></CardBody></Card>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <Table>
+              <THead><Th>ORDER ID</Th><Th>DATE</Th><Th>CUSTOMER</Th><Th>TOTAL</Th><Th>STATUS</Th><Th>ACTION</Th></THead>
+              <TBody>
+                {paged.map((order, idx) => {
+                  const next = nextStatus(order.status);
+                  return (
+                    <Tr key={order.id || idx}>
+                      <Td><span className="font-semibold">{order.id}</span></Td>
+                      <Td className="text-sm text-slate-400">{order.createdAt || "-"}</Td>
+                      <Td>{order.customerName || "Customer"}</Td>
+                      <Td className="font-semibold">{money(order.total)}</Td>
+                      <Td>
+                        <div className="flex items-center gap-2">
+                          <Chip color={statusLabel(order.status) === "Delivered" ? "success" : statusLabel(order.status) === "Cancelled" ? "danger" : "warning"} variant="flat" size="sm">{statusLabel(order.status)}</Chip>
+                          {order.paymentStatus === "paid" || order.payment_status === "paid" ? <Chip color="success" size="sm" variant="flat">Paid</Chip> : null}
+                        </div>
+                      </Td>
+                      <Td>
+                        <div className="flex items-center gap-2">
+                          {next ? (
+                            <Button size="sm" color="success" variant="flat" onPress={() => updateStatus(order.id, next)}>
+                              {next}
+                            </Button>
+                          ) : null}
+                          <Tooltip content="View order details" placement="top" showArrow>
+                            <Button size="sm" variant="light" isIconOnly onPress={() => go(`order/${order.id}`)}>
+                              <Eye size={14} />
+                            </Button>
+                          </Tooltip>
+                        </div>
+                      </Td>
+                    </Tr>
+                  );
+                })}
+              </TBody>
+            </Table>
+          </div>
+          {totalPages > 1 ? (
+            <div className="flex justify-center">
+              <Pagination total={totalPages} page={safePage} onChange={setPage} color="success" size="sm" showControls showShadow />
+            </div>
+          ) : null}
+        </>
+      )}
+    </motion.div>
+  );
+}
+
+function AdminInventoryPage({ setMessage }) {
+  const [inventory, setInventory] = useState([]);
+  const [lowStock, setLowStock] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [addCategoryName, setAddCategoryName] = useState("");
+  const [showRestock, setShowRestock] = useState(false);
+  const [newProduct, setNewProduct] = useState({ name: "", category: "", unit: "case", price: "", stockCases: "" });
+  const [productImagePreview, setProductImagePreview] = useState("");
+  const [productImageFile, setProductImageFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [restockProduct, setRestockProduct] = useState({ name: "", addCases: "" });
+  const [showEditProduct, setShowEditProduct] = useState(null);
+  const [editOriginalName, setEditOriginalName] = useState("");
+  const [editImageFile, setEditImageFile] = useState(null);
+  const [editImagePreview, setEditImagePreview] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const perPage = 10;
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await apiAdminInventory();
+      setInventory(result.inventory || []);
+      setLowStock(result.lowStock || []);
+      setCategories(result.categories || []);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const filtered = useMemo(() => {
+    if (!search) return inventory;
+    return inventory.filter((p) => p.name?.toLowerCase().includes(search.toLowerCase()));
+  }, [inventory, search]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
+  const safePage = Math.min(page, totalPages);
+  const paged = filtered.slice((safePage - 1) * perPage, safePage * perPage);
+  useEffect(() => { setPage(1); }, [search]);
+  const addCategory = async () => {
+    if (!addCategoryName.trim()) return;
+    try {
+      const result = await apiAdminCreateCategory(addCategoryName.trim());
+      setCategories(result.categories || []);
+      setAddCategoryName("");
+      setMessage(`Category "${addCategoryName.trim()}" added.`);
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+  const handleImageSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setProductImageFile(file);
+    const reader = new FileReader();
+    reader.onload = (ev) => setProductImagePreview(ev.target.result);
+    reader.readAsDataURL(file);
+  };
+  const addProduct = async () => {
+    if (!newProduct.name.trim() || !newProduct.category) return setMessage("Product name and category are required.");
+    setUploading(true);
+    try {
+      let imageUrl = "";
+      if (productImageFile && productImagePreview) {
+        const uploaded = await apiAdminUploadProductImage(productImagePreview, productImageFile.name);
+        imageUrl = uploaded?.imageUrl || "";
+      }
+      await apiAdminCreateProduct({
+        name: newProduct.name.trim(),
+        category: newProduct.category,
+        unit: newProduct.unit || "case",
+        price: Number(newProduct.price) || 0,
+        stockCases: Number(newProduct.stockCases) || 0,
+        imageUrl: imageUrl || undefined
+      });
+      setNewProduct({ name: "", category: "", unit: "case", price: "", stockCases: "" });
+      setProductImagePreview("");
+      setProductImageFile(null);
+      setMessage(`Product "${newProduct.name}" created.`);
+      load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+  const doRestock = async () => {
+    const stockToAdd = Number(restockProduct.addCases);
+    if (!restockProduct.name || !restockProduct.addCases) return setMessage("Select a product and enter the stock quantity.");
+    if (!Number.isFinite(stockToAdd) || stockToAdd <= 0) return setMessage("Stock quantity must be greater than 0.");
+    try {
+      await apiAdminRestock(restockProduct.name, stockToAdd);
+      setShowRestock(false);
+      setRestockProduct({ name: "", addCases: "" });
+      setMessage(`Restocked ${restockProduct.name}.`);
+      load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+  const doDelete = async () => {
+    if (!confirmDelete) return;
+    try {
+      await apiAdminDeleteProduct(confirmDelete.name);
+      setConfirmDelete(null);
+      setMessage(`Product "${confirmDelete.name}" deleted.`);
+      load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+  const handleEditImageSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setEditImageFile(file);
+    const reader = new FileReader();
+    reader.onload = (ev) => setEditImagePreview(ev.target.result);
+    reader.readAsDataURL(file);
+  };
+  const saveEdit = async () => {
+    if (!showEditProduct) return;
+    try {
+      let imageUrl = showEditProduct.image_url?.trim() || null;
+      if (editImageFile && editImagePreview) {
+        const uploaded = await apiAdminUploadProductImage(editImagePreview, editImageFile.name);
+        imageUrl = uploaded?.imageUrl || imageUrl;
+      }
+      const body = {};
+      if (showEditProduct.name !== editOriginalName) body.name = showEditProduct.name;
+      body.category = showEditProduct.category;
+      body.unit = showEditProduct.unit || "case";
+      body.price = Number(showEditProduct.price) || 0;
+      body.stockCases = Number(showEditProduct.stockCases) || 0;
+      body.imageUrl = imageUrl;
+      body.isActive = showEditProduct.isActive;
+      await apiAdminUpdateProduct(editOriginalName, body);
+      setShowEditProduct(null);
+      setEditOriginalName("");
+      setEditImageFile(null);
+      setEditImagePreview("");
+      setMessage(`Product "${showEditProduct.name}" updated.`);
+      load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+  return (
+    <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Card>
+          <CardBody className="gap-3">
+            <h3 className="text-sm font-bold">Add Category</h3>
+            <div className="flex gap-2">
+              <HeroInput placeholder="Category name" value={addCategoryName} onChange={(e) => setAddCategoryName(e.target.value)} size="sm" />
+              <Button size="sm" color="success" isIconOnly onPress={addCategory}><Plus size={14} /></Button>
+            </div>
+            {categories.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {categories.map((cat) => <Chip key={cat} size="sm" variant="flat">{cat}</Chip>)}
+              </div>
+            ) : null}
+          </CardBody>
+        </Card>
+        <Card>
+          <CardBody className="gap-3">
+            <h3 className="text-sm font-bold">Restock</h3>
+            <Button color="warning" variant="flat" onPress={() => setShowRestock(true)} startContent={<Plus size={14} />}>Add Stock</Button>
+          </CardBody>
+        </Card>
+      </div>
+      <Card>
+        <CardBody className="space-y-4">
+          <h3 className="text-sm font-bold">Add Product</h3>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <HeroInput
+              label="Product name"
+              placeholder="e.g. C2 Apple"
+              value={newProduct.name}
+              onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
+              className="sm:col-span-2"
+            />
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-300">
+              <span>Category</span>
+              <select
+                className="min-h-11 w-full rounded-xl border border-white/10 bg-white/[.06] px-3 text-sm text-slate-50 outline-none"
+                value={newProduct.category}
+                onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}
+              >
+                <option value="" className="bg-slate-900 text-slate-400">Select category</option>
+                {categories.map((cat) => (
+                  <option key={cat} value={cat} className="bg-slate-900 text-slate-50">{cat}</option>
+                ))}
+              </select>
+            </label>
+            <HeroInput label="Unit" value={newProduct.unit} onChange={(e) => setNewProduct({ ...newProduct, unit: e.target.value })} />
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-300">
+              <span>Price (per case)</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className="min-h-11 w-full rounded-xl border border-white/10 bg-white/[.06] px-3 text-sm text-slate-50 outline-none"
+                value={newProduct.price}
+                onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
+              />
+            </label>
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-300">
+              <span>Initial stock (cases)</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                className="min-h-11 w-full rounded-xl border border-white/10 bg-white/[.06] px-3 text-sm text-slate-50 outline-none"
+                value={newProduct.stockCases}
+                onChange={(e) => setNewProduct({ ...newProduct, stockCases: e.target.value })}
+              />
+            </label>
+          </div>
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="flex-1">
+              <p className="mb-1.5 text-sm font-semibold text-slate-300">Product image</p>
+              <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-white/10 bg-white/[.06] px-4 py-3 text-sm text-slate-400 hover:border-white/20">
+                <span>{productImageFile ? productImageFile.name : "Choose file"}</span>
+                <input type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
+              </label>
+            </div>
+            {productImagePreview ? (
+              <img src={productImagePreview} alt="" className="h-16 w-16 shrink-0 rounded-xl border border-white/10 object-cover" />
+            ) : null}
+            <Button color="success" onPress={addProduct} isLoading={uploading}>
+              {uploading ? "Uploading..." : "Add Product"}
+            </Button>
+          </div>
+        </CardBody>
+      </Card>
+      <div className="flex items-center gap-3">
+        <HeroInput placeholder="Search products..." value={search} onChange={(e) => setSearch(e.target.value)} startContent={<Search size={16} />} size="sm" className="max-w-xs" />
+        <Chip variant="flat" size="sm">{filtered.length} products</Chip>
+        <Button size="sm" variant="light" isIconOnly onPress={load}><RefreshCw size={14} /></Button>
+      </div>
+      {loading ? (
+        <Card><CardBody className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}</CardBody></Card>
+      ) : paged.length === 0 ? (
+        <Card><CardBody><p className="text-sm text-slate-400">No products found.</p></CardBody></Card>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <Table>
+              <THead><Th>IMAGE</Th><Th>PRODUCT</Th><Th>CATEGORY</Th><Th>PRICE</Th><Th>STOCK</Th><Th>STATUS</Th><Th>ACTION</Th></THead>
+              <TBody>
+                {paged.map((p, idx) => (
+                  <Tr key={p.id || p.sku || idx}>
+                    <Td>
+                      {p.image_url ? (
+                        <img src={p.image_url} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                      ) : (
+                        <div className="grid h-10 w-10 place-items-center rounded-lg bg-white/5 text-[10px] text-slate-500">{p.name?.charAt(0) || "?"}</div>
+                      )}
+                    </Td>
+                    <Td><span className="font-semibold">{p.name}</span></Td>
+                    <Td>{p.category || "-"}</Td>
+                    <Td>{money(p.price)}</Td>
+                    <Td>{formatQty(p.stockCases)} cases</Td>
+                    <Td>
+                      <Chip
+                        color={p.status === "In Stock" ? "success" : p.status === "Low Stock" ? "warning" : "danger"}
+                        variant="flat"
+                        size="sm"
+                      >
+                        {p.status || (p.stockCases > 10 ? "In Stock" : p.stockCases > 0 ? "Low Stock" : "Out of Stock")}
+                      </Chip>
+                    </Td>
+                    <Td>
+                      <div className="flex gap-1">
+                        <Button size="sm" variant="light" isIconOnly onPress={() => { setShowEditProduct({ ...p, isActive: p.is_active ?? true }); setEditOriginalName(p.name); }}>
+                          <Eye size={14} />
+                        </Button>
+                        <Button size="sm" variant="light" isIconOnly color="danger" onPress={() => setConfirmDelete(p)}>
+                          <Trash2 size={14} />
+                        </Button>
+                      </div>
+                    </Td>
+                  </Tr>
+                ))}
+              </TBody>
+            </Table>
+          </div>
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span>Page {safePage} of {totalPages} &bull; {filtered.length} row(s)</span>
+            <div className="flex gap-1">
+              <Button size="sm" variant="light" isDisabled={safePage <= 1} onPress={() => setPage(safePage - 1)}>Prev</Button>
+              <Button size="sm" variant="light" isDisabled={safePage >= totalPages} onPress={() => setPage(safePage + 1)}>Next</Button>
+            </div>
+          </div>
+        </>
+      )}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader><h2 className="text-lg font-black">Forecast Summary</h2></CardHeader>
+          <CardBody className="space-y-3">
+            <p className="text-xs text-slate-500">Forecast helps estimate stock needs based on past sales trends.</p>
+            <div className="rounded-xl border border-white/10 bg-white/[.02] p-4">
+              <p className="text-sm font-semibold text-emerald-300">Sample: next 5 days demand estimate</p>
+              <p className="mt-2 text-xs text-slate-500">
+                Coming soon &mdash; forecast will pull from order history to recommend restock quantities per product.
+              </p>
+            </div>
+          </CardBody>
+        </Card>
+        <Card>
+          <CardHeader><h2 className="text-lg font-black text-amber-300">Low Stock Alerts</h2></CardHeader>
+          <CardBody>
+            {lowStock.length === 0 ? (
+              <p className="text-sm text-slate-400">All products are well-stocked.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <THead><Th>PRODUCT</Th><Th>STOCK</Th><Th>STATUS</Th></THead>
+                  <TBody>
+                    {lowStock.map((p, idx) => (
+                      <Tr key={p.id || p.sku || idx}>
+                        <Td><span className="font-semibold">{p.name}</span></Td>
+                        <Td>{formatQty(p.stockCases)} cases</Td>
+                        <Td>
+                          <Chip
+                            color={p.status === "Out of Stock" ? "danger" : "warning"}
+                            variant="flat"
+                            size="sm"
+                          >
+                            {p.status}
+                          </Chip>
+                        </Td>
+                      </Tr>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
+            )}
+          </CardBody>
+        </Card>
+      </div>
+
+      <Modal isOpen={showRestock} onOpenChange={setShowRestock}>
+        <Modal.Backdrop>
+          <Modal.Container size="sm">
+            <Modal.Dialog>
+              <Modal.Header><h2 className="text-lg font-black text-white">Restock Product</h2></Modal.Header>
+              <Modal.Body className="space-y-4">
+                <label className="grid gap-1.5 text-sm font-semibold text-slate-300">
+                  <span>Product *</span>
+                  <select
+                    className="min-h-11 w-full rounded-xl border border-white/10 bg-white/[.06] px-3 text-sm text-slate-50 outline-none"
+                    value={restockProduct.name}
+                    onChange={(e) => setRestockProduct({ ...restockProduct, name: e.target.value })}
+                  >
+                    <option value="" className="bg-slate-900 text-slate-400">Select product</option>
+                    {inventory.map((p) => (
+                      <option key={p.name} value={p.name} className="bg-slate-900 text-slate-50">{p.name} ({formatQty(p.stockCases)} cases)</option>
+                    ))}
+                  </select>
+                </label>
+                {restockProduct.name ? (
+                  <div className="rounded-xl border border-white/10 bg-white/[.03] p-3 text-sm">
+                    <span className="text-slate-400">Current stock: </span>
+                    <span className="font-semibold text-white">{formatQty(inventory.find((p) => p.name === restockProduct.name)?.stockCases || 0)} cases</span>
+                    {Number(restockProduct.addCases) > 0 ? (
+                      <span className="ml-2 text-emerald-400">
+                        &rarr; {formatQty((inventory.find((p) => p.name === restockProduct.name)?.stockCases || 0) + Number(restockProduct.addCases))} cases after
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                <HeroInput
+                  label="Stock quantity *"
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="Enter number of cases"
+                  value={restockProduct.addCases}
+                  onChange={(e) => setRestockProduct({ ...restockProduct, addCases: e.target.value })}
+                />
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => setShowRestock(false)}>Cancel</Button>
+                <Button color="warning" onPress={doRestock}>Restock Now</Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
+      <Modal isOpen={!!showEditProduct} onOpenChange={() => { setShowEditProduct(null); setEditOriginalName(""); setEditImageFile(null); setEditImagePreview(""); }}>
+        <Modal.Backdrop>
+          <Modal.Container size="sm">
+            <Modal.Dialog>
+              <Modal.Header><h2 className="text-lg font-black text-white">Edit Product</h2></Modal.Header>
+              <Modal.Body className="space-y-4">
+                <div className="flex items-center gap-4">
+                  {editImagePreview ? (
+                    <img src={editImagePreview} alt="" className="h-16 w-16 shrink-0 rounded-xl border border-white/10 object-cover" />
+                  ) : showEditProduct?.image_url ? (
+                    <img src={showEditProduct.image_url} alt="" className="h-16 w-16 shrink-0 rounded-xl border border-white/10 object-cover" onError={(e) => { e.target.style.display = "none" }} />
+                  ) : (
+                    <div className="grid h-16 w-16 shrink-0 place-items-center rounded-xl bg-white/5 text-lg font-bold text-slate-500">{showEditProduct?.name?.charAt(0) || "?"}</div>
+                  )}
+                  <div>
+                    <p className="text-xs text-slate-500">SKU: {showEditProduct?.sku || "-"}</p>
+                    <p className="text-xs text-slate-500">Current stock: <span className="font-semibold text-white">{formatQty(showEditProduct?.stockCases || 0)} cases</span></p>
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <HeroInput label="Name" value={showEditProduct?.name || ""} onChange={(e) => setShowEditProduct({ ...showEditProduct, name: e.target.value })} className="sm:col-span-2" />
+                  <label className="grid gap-1.5 text-sm font-semibold text-slate-300">
+                    <span>Category</span>
+                    <select
+                      className="min-h-11 w-full rounded-xl border border-white/10 bg-white/[.06] px-3 text-sm text-slate-50 outline-none"
+                      value={showEditProduct?.category || ""}
+                      onChange={(e) => setShowEditProduct({ ...showEditProduct, category: e.target.value })}
+                    >
+                      <option value="" className="bg-slate-900 text-slate-400">Select category</option>
+                      {categories.map((cat) => (
+                        <option key={cat} value={cat} className="bg-slate-900 text-slate-50">{cat}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <HeroInput label="Unit" value={showEditProduct?.unit || "case"} onChange={(e) => setShowEditProduct({ ...showEditProduct, unit: e.target.value })} />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <HeroInput label="Price" type="number" value={showEditProduct?.price ?? ""} onChange={(e) => setShowEditProduct({ ...showEditProduct, price: Number(e.target.value) })} startContent={<span className="text-xs text-slate-500">PHP</span>} />
+                  <HeroInput label="Stock (cases)" type="number" value={showEditProduct?.stockCases ?? ""} onChange={(e) => setShowEditProduct({ ...showEditProduct, stockCases: Number(e.target.value) })} />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold text-slate-300">Product image</p>
+                  <div className="flex flex-wrap gap-3">
+                    <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-white/10 bg-white/[.06] px-4 py-2.5 text-sm text-slate-400 hover:border-white/20">
+                      <span>{editImageFile ? editImageFile.name : "Choose file"}</span>
+                      <input type="file" accept="image/*" className="hidden" onChange={handleEditImageSelect} />
+                    </label>
+                    {!editImageFile && showEditProduct?.image_url ? (
+                      <Button size="sm" variant="flat" color="danger" onPress={() => setShowEditProduct({ ...showEditProduct, image_url: "" })}>
+                        Remove image
+                      </Button>
+                    ) : null}
+                  </div>
+                  {!editImageFile && showEditProduct?.image_url ? (
+                    <HeroInput label="Or enter image URL" value={showEditProduct.image_url || ""} onChange={(e) => setShowEditProduct({ ...showEditProduct, image_url: e.target.value })} placeholder="https://..." />
+                  ) : null}
+                </div>
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => { setShowEditProduct(null); setEditOriginalName(""); setEditImageFile(null); setEditImagePreview(""); }}>Cancel</Button>
+                <Button color="success" onPress={saveEdit}>Save Changes</Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
+      <Modal isOpen={!!confirmDelete} onOpenChange={() => setConfirmDelete(null)}>
+        <Modal.Backdrop>
+          <Modal.Container size="xs">
+            <Modal.Dialog>
+              <Modal.Header><h2 className="text-lg font-black text-white">Delete Product</h2></Modal.Header>
+              <Modal.Body>
+                <p className="text-sm text-slate-400">
+                  Are you sure you want to delete <strong className="text-slate-200">{confirmDelete?.name}</strong>?
+                </p>
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => setConfirmDelete(null)}>Cancel</Button>
+                <Button color="danger" onPress={doDelete}>Delete</Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
+    </motion.div>
+  );
+}
+
+function AdminDeliveryPage({ setMessage }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const perPage = 10;
+  const load = useCallback(async () => {
+    try {
+      const result = await apiAdminDelivery();
+      setData(result);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    setLoading(true);
+    load();
+    const interval = setInterval(load, 8000);
+    return () => clearInterval(interval);
+  }, []);
+  const tracks = data?.productTracks || [];
+  const activeOrder = data?.activeOrder;
+  const totalPages = Math.max(1, Math.ceil(tracks.length / perPage));
+  const safePage = Math.min(page, totalPages);
+  const paged = tracks.slice((safePage - 1) * perPage, safePage * perPage);
+  if (loading) {
+    return (
+      <div className="space-y-5">
+        <Skeleton className="h-40 w-full rounded-2xl" />
+        <Skeleton className="h-40 w-full rounded-2xl" />
+      </div>
+    );
+  }
+  const timelineSteps = ["Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered"];
+  return (
+    <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      {activeOrder ? (
+        <Card>
+          <CardHeader><h2 className="text-lg font-black">Active Delivery</h2></CardHeader>
+          <CardBody>
+            <p className="text-sm text-slate-400 mb-4">Order: <strong>{activeOrder.id || "Active order"}</strong></p>
+            <div className="flex items-center gap-3 overflow-x-auto pb-2">
+              {timelineSteps.map((step, idx) => {
+                const current = statusLabel(activeOrder.status);
+                const stepIdx = timelineSteps.indexOf(current);
+                const done = idx <= stepIdx;
+                return (
+                  <div key={step} className="flex items-center gap-3 min-w-max">
+                    <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ${
+                      done ? "bg-emerald-500 text-white" : "bg-white/10 text-slate-500"
+                    }`}>
+                      {done ? "\u2713" : idx + 1}
+                    </div>
+                    <span className={`text-sm ${done ? "text-emerald-300 font-semibold" : "text-slate-500"}`}>{step}</span>
+                    {idx < timelineSteps.length - 1 ? <div className={`h-px w-12 ${done ? "bg-emerald-500/50" : "bg-white/10"}`} /> : null}
+                  </div>
+                );
+              })}
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
+      <Card>
+        <CardHeader className="justify-between">
+          <h2 className="text-lg font-black">Product Delivery Tracking</h2>
+          <div className="flex items-center gap-2">
+            <Chip variant="flat" size="sm" startContent={<RefreshCw size={12} />}>Auto-refresh</Chip>
+            <Button size="sm" variant="light" isIconOnly onPress={load}><RefreshCw size={14} /></Button>
+          </div>
+        </CardHeader>
+        <CardBody>
+          {tracks.length === 0 ? (
+            <p className="text-sm text-slate-400">No active deliveries.</p>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <Table>
+                  <THead><Th>ORDER</Th><Th>PRODUCT</Th><Th>QTY</Th><Th>CUSTOMER</Th><Th>STATUS</Th><Th>UPDATED</Th></THead>
+                  <TBody>
+                    {paged.map((track, idx) => (
+                      <Tr key={idx}>
+                        <Td><span className="font-semibold">{track.orderId}</span></Td>
+                        <Td>{track.productName}</Td>
+                        <Td>{formatQty(track.qty)}</Td>
+                        <Td>{track.customerName}</Td>
+                        <Td>
+                          <Chip
+                            color={statusLabel(track.status) === "Delivered" ? "success" : statusLabel(track.status) === "Cancelled" ? "danger" : "warning"}
+                            variant="flat"
+                            size="sm"
+                          >
+                            {statusLabel(track.status)}
+                          </Chip>
+                        </Td>
+                        <Td className="text-sm text-slate-400">{track.updatedAt || "-"}</Td>
+                      </Tr>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
+              {totalPages > 1 ? (
+                <div className="mt-4 flex justify-center">
+                  <Pagination total={totalPages} page={safePage} onChange={setPage} color="success" size="sm" showControls showShadow />
+                </div>
+              ) : null}
+            </>
+          )}
+        </CardBody>
+      </Card>
+    </motion.div>
+  );
+}
+
+function AdminCustomersPage({ setMessage }) {
+  const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const perPage = 10;
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await apiAdminCustomers();
+      setCustomers(result.customers || []);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const totalPages = Math.max(1, Math.ceil(customers.length / perPage));
+  const safePage = Math.min(page, totalPages);
+  const paged = customers.slice((safePage - 1) * perPage, safePage * perPage);
+  return (
+    <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <Card>
+        <CardHeader><h2 className="text-lg font-black">Customers</h2></CardHeader>
+        <CardBody>
+          {loading ? (
+            <div className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+          ) : paged.length === 0 ? (
+            <p className="text-sm text-slate-400">No customers found.</p>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <Table>
+                  <THead><Th>NAME</Th><Th>EMAIL</Th><Th>TOTAL ORDERS</Th><Th>LAST ORDER</Th></THead>
+                  <TBody>
+                    {paged.map((c, idx) => (
+                      <Tr key={c.email || idx}>
+                        <Td><span className="font-semibold">{c.name}</span></Td>
+                        <Td className="text-sm text-slate-400">{c.email}</Td>
+                        <Td>{c.totalOrders || 0}</Td>
+                        <Td className="text-sm text-slate-400">{c.lastOrder || "-"}</Td>
+                      </Tr>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
+              {totalPages > 1 ? (
+                <div className="mt-4 flex justify-center">
+                  <Pagination total={totalPages} page={safePage} onChange={setPage} color="success" size="sm" showControls showShadow />
+                </div>
+              ) : null}
+            </>
+          )}
+        </CardBody>
+      </Card>
+    </motion.div>
+  );
+}
+
+function AdminRewardsPage({ setMessage }) {
+  const [rewards, setRewards] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [redeemTarget, setRedeemTarget] = useState(null);
+  const [customerEmail, setCustomerEmail] = useState("");
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await apiAdminRewards();
+      setRewards(result.rewards || []);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const doRedeem = async () => {
+    if (!customerEmail.trim()) return setMessage("Customer email is required.");
+    try {
+      await apiAdminRedeemReward(redeemTarget, customerEmail.trim());
+      setMessage(`Reward "${redeemTarget}" redeemed for ${customerEmail}.`);
+      setRedeemTarget(null);
+      setCustomerEmail("");
+      load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+  const topCustomer = rewards.reduce((best, r) => (r.points > (best?.points || 0) ? r : best), null);
+  return (
+    <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      {topCustomer ? (
+        <Card className="border border-emerald-400/20 bg-emerald-500/10">
+          <CardBody className="flex items-center gap-4">
+            <Sparkles size={24} className="text-emerald-400" />
+            <div>
+              <p className="text-sm font-bold text-emerald-300">Top Customer</p>
+              <p className="font-black text-white">{topCustomer.customer || topCustomer.email}</p>
+              <p className="text-sm text-slate-400">{topCustomer.points} points available</p>
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Card>
+          <CardBody className="gap-3">
+            <h3 className="text-lg font-black">Free Delivery</h3>
+            <p className="text-sm text-slate-400">500 points</p>
+            <Button color="success" variant="flat" onPress={() => setRedeemTarget("free_delivery")}>Redeem for Customer</Button>
+          </CardBody>
+        </Card>
+        <Card>
+          <CardBody className="gap-3">
+            <h3 className="text-lg font-black">10% Discount</h3>
+            <p className="text-sm text-slate-400">1000 points</p>
+            <Button color="success" variant="flat" onPress={() => setRedeemTarget("discount_10")}>Redeem for Customer</Button>
+          </CardBody>
+        </Card>
+      </div>
+      <Card>
+        <CardHeader><h2 className="text-lg font-black">Customer Rewards</h2></CardHeader>
+        <CardBody>
+          {loading ? (
+            <div className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+          ) : rewards.length === 0 ? (
+            <p className="text-sm text-slate-400">No reward data.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <THead><Th>CUSTOMER</Th><Th>EMAIL</Th><Th>POINTS</Th><Th>EARNED</Th><Th>REDEEMED</Th></THead>
+                <TBody>
+                  {rewards.map((r, idx) => (
+                    <Tr key={r.userId || idx}>
+                      <Td><span className="font-semibold">{r.customer || "Customer"}</span></Td>
+                      <Td className="text-sm text-slate-400">{r.email}</Td>
+                      <Td><Chip color={r.points > 0 ? "success" : "default"} variant="flat" size="sm">{r.points || 0}</Chip></Td>
+                      <Td>{r.earnedPoints || 0}</Td>
+                      <Td>{r.redeemedPoints || 0}</Td>
+                    </Tr>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+      <Modal isOpen={!!redeemTarget} onOpenChange={() => setRedeemTarget(null)} size="sm">
+        <Modal.Dialog>
+          <Modal.Header><h2 className="text-lg font-black text-white">Redeem {redeemTarget === "free_delivery" ? "Free Delivery" : "10% Discount"}</h2></Modal.Header>
+          <Modal.Body className="space-y-3">
+            <p className="text-sm text-slate-400">Enter the customer email to redeem this reward.</p>
+            <HeroInput label="Customer Email" type="email" value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} />
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="flat" onPress={() => setRedeemTarget(null)}>Cancel</Button>
+            <Button color="success" onPress={doRedeem}>Redeem</Button>
+          </Modal.Footer>
+        </Modal.Dialog>
+      </Modal>
+    </motion.div>
+  );
+}
+
+function AdminReportsPage({ setMessage }) {
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await apiAdminReports();
+      setReports(result.reports || []);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  return (
+    <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="flex flex-wrap gap-3">
+        <Button variant="flat" startContent={<BarChart3 size={14} />}>PDF Export</Button>
+        <Button variant="flat" startContent={<BarChart3 size={14} />}>Excel Export</Button>
+        <Button variant="flat" startContent={<BarChart3 size={14} />}>Print</Button>
+      </div>
+      <Card>
+        <CardHeader><h2 className="text-lg font-black">Reports</h2></CardHeader>
+        <CardBody>
+          {loading ? (
+            <div className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+          ) : reports.length === 0 ? (
+            <p className="text-sm text-slate-400">No reports available.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <THead><Th>REPORT TYPE</Th><Th>COVERAGE</Th><Th>STATUS</Th></THead>
+                <TBody>
+                  {reports.map((r, idx) => (
+                    <Tr key={idx}>
+                      <Td><span className="font-semibold">{r.reportType}</span></Td>
+                      <Td className="text-sm text-slate-400">{r.coverage || "-"}</Td>
+                      <Td><Chip color={r.status === "ready" ? "success" : r.status === "pending" ? "warning" : "default"} variant="flat" size="sm">{r.status || "Unknown"}</Chip></Td>
+                    </Tr>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+    </motion.div>
+  );
+}
+
+function KpiCard({ label, value, icon }) {
+  return (
+    <Card>
+      <CardBody className="flex-row items-center gap-4">
+        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-400/15 text-emerald-300">
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
+          <p className="mt-1 truncate text-xl font-black">{value}</p>
+        </div>
+      </CardBody>
+    </Card>
+  );
+}

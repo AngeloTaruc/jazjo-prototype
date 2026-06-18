@@ -194,6 +194,21 @@
       .left{min-height:320px}
       .grid2{grid-template-columns:1fr}
     }
+    body{
+      background:
+        linear-gradient(135deg, rgba(22,163,74,.12), transparent 30%),
+        linear-gradient(315deg, rgba(96,165,250,.10), transparent 32%),
+        #090d14;
+      color:#f8fafc;
+    }
+    .nav{background:rgba(7,11,18,.92);border-bottom-color:#263247}
+    .nav-links{color:#a9b5c7}
+    .nav-links a:hover{background:rgba(255,255,255,.06);color:#f8fafc}
+    .card{background:#111827;border-color:#263247;border-radius:16px}
+    .sub,label{color:#a9b5c7}
+    .input,.textarea{background:#0c1220;border-color:#263247;color:#f8fafc;box-shadow:var(--shadow2)}
+    .btn-ghost{background:#1a2436;color:#f8fafc;border:1px solid #263247}
+    .back{color:#f8fafc}
   </style>
 </head>
 <body>
@@ -245,36 +260,43 @@
         <form id="registerForm" autocomplete="on" class="grid">
           <div class="grid grid2">
             <div class="field">
-              <label for="fullName">Full Name</label>
-              <input class="input" id="fullName" name="fullName" type="text" placeholder="Juan Dela Cruz" required />
+              <label for="firstName">First Name</label>
+              <input class="input" id="firstName" name="firstName" type="text" placeholder="Juan" required />
             </div>
 
             <div class="field">
-              <label for="email">Email</label>
-              <input class="input" id="email" name="email" type="email" placeholder="you@example.com" required />
+              <label for="lastName">Last Name</label>
+              <input class="input" id="lastName" name="lastName" type="text" placeholder="Dela Cruz" required />
             </div>
           </div>
 
           <div class="grid grid2">
             <div class="field">
-              <label for="contact">Contact Number</label>
-              <input class="input" id="contact" name="contact" type="text" placeholder="09XXXXXXXXX" required />
+              <label for="email">Email</label>
+              <input class="input" id="email" name="email" type="email" placeholder="you@example.com" required />
             </div>
 
             <div class="field">
+              <label for="contact">Contact Number</label>
+              <input class="input" id="contact" name="contact" type="tel" inputmode="numeric" pattern="09[0-9]{9}" maxlength="11" placeholder="09XXXXXXXXX" required />
+            </div>
+          </div>
+
+          <div class="grid grid2">
+            <div class="field">
               <label for="password">Password</label>
-              <input class="input" id="password" name="password" type="password" placeholder="Minimum 8 characters" minlength="8" required />
+              <input class="input" id="password" name="password" type="password" placeholder="Uppercase, lowercase, number, symbol" minlength="8" required />
+            </div>
+
+            <div class="field">
+              <label for="confirmPassword">Confirm Password</label>
+              <input class="input" id="confirmPassword" name="confirmPassword" type="password" placeholder="Re-enter your password" minlength="8" required />
             </div>
           </div>
 
           <div class="field">
             <label for="address">Delivery Address</label>
             <textarea class="textarea" id="address" name="address" placeholder="House number, street, barangay, city" required></textarea>
-          </div>
-
-          <div class="field">
-            <label for="confirmPassword">Confirm Password</label>
-            <input class="input" id="confirmPassword" name="confirmPassword" type="password" placeholder="Re-enter your password" minlength="8" required />
           </div>
 
           <div class="actions">
@@ -308,13 +330,22 @@
       msg.style.display = "none";
       msg.textContent = "";
 
-      const fullName = (document.getElementById("fullName").value || "").trim();
+      const firstName = (document.getElementById("firstName").value || "").trim();
+      const lastName = (document.getElementById("lastName").value || "").trim();
       const email = (document.getElementById("email").value || "").trim().toLowerCase();
       const contact = (document.getElementById("contact").value || "").trim();
       const address = (document.getElementById("address").value || "").trim();
       const password = document.getElementById("password").value || "";
       const confirmPassword = document.getElementById("confirmPassword").value || "";
 
+      if (!/^09\d{9}$/.test(contact)) {
+        showError("Contact number must be numeric and follow Philippine format: 09xxxxxxxxx.");
+        return;
+      }
+      if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
+        showError("Password must include uppercase, lowercase, number, and special character.");
+        return;
+      }
       if (password !== confirmPassword) {
         showError("Passwords do not match.");
         return;
@@ -324,7 +355,7 @@
         const res = await fetch("/api/auth/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fullName, email, contact, address, password })
+          body: JSON.stringify({ firstName, lastName, email, contact, address, password })
         });
         const data = await res.json();
         if (!res.ok) {

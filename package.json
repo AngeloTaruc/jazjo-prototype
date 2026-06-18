@@ -4,6 +4,20 @@
   "type": "module",
   "scripts": {
     "start": "node server/index.mjs",
-    "dev": "node server/index.mjs"
+    "dev": "node server/index.mjs",
+    "dev:customer": "vite --config frontend/customer/vite.config.js",
+    "build:customer": "vite build --config frontend/customer/vite.config.js",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@heroui/react": "^3.2.1",
+    "@tailwindcss/vite": "^4.3.1",
+    "@vitejs/plugin-react": "^6.0.2",
+    "framer-motion": "^12.40.0",
+    "lucide-react": "^1.21.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.1",
+    "vite": "^8.0.16"
   }
 }
