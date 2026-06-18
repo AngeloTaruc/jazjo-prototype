@@ -65,6 +65,14 @@ const REWARD_CATALOG = {
     cost: 1000
   }
 };
+const PRODUCT_IMAGE_BUCKET = "product-images";
+const PRODUCT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const PRODUCT_IMAGE_ALLOWED_TYPES = new Map([
+  ["image/png", "png"],
+  ["image/jpeg", "jpg"],
+  ["image/webp", "webp"],
+  ["image/gif", "gif"]
+]);
 
 function sendJson(res, status, body){
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -76,12 +84,12 @@ function sendText(res, status, body, type="text/plain; charset=utf-8"){
   res.end(body);
 }
 
-function readBody(req){
+function readBody(req, { limit = 1_000_000 } = {}){
   return new Promise((resolve, reject) => {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if(body.length > 1_000_000){
+      if(body.length > limit){
         reject(new Error("Payload too large"));
         req.destroy();
       }
@@ -91,8 +99,8 @@ function readBody(req){
   });
 }
 
-async function readJson(req){
-  const body = await readBody(req);
+async function readJson(req, options = {}){
+  const body = await readBody(req, options);
   return body ? JSON.parse(body) : {};
 }
 
@@ -128,6 +136,90 @@ async function supabaseRequest(pathname, { method="GET", body, serviceRole=false
     throw new Error(msg);
   }
   return data;
+}
+
+function makeSafeFileBase(fileName){
+  const withoutExt = String(fileName || "product-image")
+    .replace(/\.[^.]+$/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return withoutExt || "product-image";
+}
+
+function parseProductImagePayload(payload){
+  const dataUrl = String(payload?.dataUrl || payload?.data_url || "").trim();
+  const match = dataUrl.match(/^data:([^;,]+);base64,([a-z0-9+/=\s]+)$/i);
+  if(!match){
+    throw new Error("Upload a valid base64 image data URL.");
+  }
+
+  const contentType = match[1].toLowerCase();
+  const extension = PRODUCT_IMAGE_ALLOWED_TYPES.get(contentType);
+  if(!extension){
+    throw new Error("Only PNG, JPEG, WebP, and GIF images are allowed.");
+  }
+
+  const buffer = Buffer.from(match[2].replace(/\s/g, ""), "base64");
+  if(!buffer.length){
+    throw new Error("Product image cannot be empty.");
+  }
+  if(buffer.length > PRODUCT_IMAGE_MAX_BYTES){
+    throw new Error("Product image must be 5MB or smaller.");
+  }
+
+  const safeName = `${makeSafeFileBase(payload?.fileName || payload?.file_name)}-${Date.now()}`;
+  return { buffer, contentType, extension, safeName };
+}
+
+async function ensureProductImageBucket(){
+  try{
+    await fetch(`${SUPABASE_URL}/storage/v1/bucket`, {
+      method: "POST",
+      headers: {
+        ...supabaseHeaders(true, { "Content-Type": "application/json" })
+      },
+      body: JSON.stringify({
+        id: PRODUCT_IMAGE_BUCKET,
+        name: PRODUCT_IMAGE_BUCKET,
+        public: true
+      })
+    });
+  }catch(_err){}
+}
+
+async function uploadProductImage(payload){
+  if(!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY){
+    throw new Error("Missing Supabase storage env vars.");
+  }
+  const image = parseProductImagePayload(payload);
+  await ensureProductImageBucket();
+
+  const objectPath = `products/${image.safeName}.${image.extension}`;
+  const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/${PRODUCT_IMAGE_BUCKET}/${objectPath}`, {
+    method: "POST",
+    headers: {
+      ...supabaseHeaders(true, {
+        "Content-Type": image.contentType,
+        "x-upsert": "true"
+      })
+    },
+    body: image.buffer
+  });
+
+  if(!uploadRes.ok){
+    const text = await uploadRes.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    const msg = data?.message || data?.error || text || `Supabase storage error ${uploadRes.status}`;
+    throw new Error(msg);
+  }
+
+  return {
+    imageUrl: `${SUPABASE_URL}/storage/v1/object/public/${PRODUCT_IMAGE_BUCKET}/${objectPath}`,
+    path: objectPath
+  };
 }
 
 function escapeCsvValues(values){
@@ -1929,6 +2021,13 @@ async function handleApi(req, res, url){
     sendJson(res, 200, await getPanelInventory());
     return true;
   }
+  if(req.method === "POST" && url.pathname === "/api/panel/admin/inventory/product-image"){
+    await requireAuth(req, ["admin"]);
+    const payload = await readJson(req, { limit: 7_500_000 });
+    const uploaded = await uploadProductImage(payload);
+    sendJson(res, 201, { ok: true, ...uploaded });
+    return true;
+  }
   if(req.method === "POST" && url.pathname === "/api/panel/admin/inventory/products"){
     await requireAuth(req, ["admin"]);
     const payload = await readJson(req);
@@ -2070,5 +2169,5 @@ if(!process.env.VERCEL){
   });
 }
 
-export { handleRequest };
+export { PRODUCT_IMAGE_MAX_BYTES, handleRequest, parseProductImagePayload };
 export default handleRequest;

@@ -24,9 +24,14 @@
     });
   };
   const esc = (s) => String(s ?? "").replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]));
+  const attr = (s) => String(s ?? "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[m]));
   const toNum = (v, fallback = 0) => {
     const n = Number(v);
     return Number.isFinite(n) ? n : fallback;
+  };
+  const productImagePlaceholder = (name) => {
+    const label = String(name || "Product").replace(/[<&>]/g, "");
+    return "data:image/svg+xml;base64," + btoa(`<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='100%' height='100%' fill='#eef2f7'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='#64748b' font-family='Arial' font-size='16' font-weight='700'>${label.slice(0, 18)}</text></svg>`);
   };
 
   async function apiRequest(pathname, options = {}) {
@@ -50,6 +55,31 @@
   const apiPatch = (pathname, body) => apiRequest(pathname, { method: "PATCH", body });
   const apiPost = (pathname, body) => apiRequest(pathname, { method: "POST", body });
   let deliveryRefreshTimer = null;
+
+  function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("Unable to read selected image."));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadProductImageFile(file) {
+    if (!file) return "";
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type || "")) {
+      throw new Error("Only PNG, JPEG, WebP, and GIF images are allowed.");
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      throw new Error("Product image must be 5MB or smaller.");
+    }
+    const dataUrl = await fileToDataUrl(file);
+    const res = await apiPost("/api/panel/admin/inventory/product-image", {
+      fileName: file.name,
+      dataUrl
+    });
+    return res.imageUrl || "";
+  }
 
   function statusText(status) {
     const map = {
@@ -297,6 +327,8 @@
     const newProductUnit = document.querySelector("#newProductUnit");
     const newProductPrice = document.querySelector("#newProductPrice");
     const newProductStock = document.querySelector("#newProductStock");
+    const newProductImage = document.querySelector("#newProductImage");
+    const newProductImagePreview = document.querySelector("#newProductImagePreview");
     const addProductBtn = document.querySelector("#addProductBtn");
     const productMessage = document.querySelector("#productMessage");
     const restockProductName = document.querySelector("#restockProductName");
@@ -348,13 +380,14 @@
         pageSize: 10,
         renderRow: (p) => `
         <tr>
+          <td><img class="productThumb" src="${attr(p.image_url || productImagePlaceholder(p.name))}" alt="${attr(p.name)}"></td>
           <td>${esc(p.name)}</td>
           <td>${Number(p.stockCases || 0)}</td>
           <td>${esc(p.status)}</td>
-          <td><button class="btn2" type="button" data-edit-name="${esc(p.name)}">Edit</button></td>
+          <td><button class="btn2" type="button" data-edit-name="${attr(p.name)}">Edit</button></td>
         </tr>
       `,
-        emptyRow: `<tr><td colspan="4">No products found</td></tr>`,
+        emptyRow: `<tr><td colspan="5">No products found</td></tr>`,
         onRendered: () => bindInventoryEditButtons(allInventory, renderAdminInventory)
       });
     };
@@ -362,6 +395,15 @@
     draw();
     drawCategoryFlow();
     drawRestockFlow();
+    if (newProductImagePreview) newProductImagePreview.src = productImagePlaceholder("New Product");
+    if (newProductImage) {
+      newProductImage.onchange = () => {
+        const file = newProductImage.files?.[0];
+        if (newProductImagePreview) {
+          newProductImagePreview.src = file ? URL.createObjectURL(file) : productImagePlaceholder("New Product");
+        }
+      };
+    }
     if (lowStockBody) {
       renderPaginatedTable({
         tbody: lowStockBody,
@@ -404,17 +446,21 @@
         return;
       }
       try {
+        const imageUrl = await uploadProductImageFile(newProductImage?.files?.[0]);
         await apiPost("/api/panel/admin/inventory/products", {
           name,
           category,
           unit,
           price,
-          stockCases
+          stockCases,
+          imageUrl
         });
         showMessage(productMessage, "Product added.");
         if (newProductName) newProductName.value = "";
         if (newProductPrice) newProductPrice.value = "1";
         if (newProductStock) newProductStock.value = "0";
+        if (newProductImage) newProductImage.value = "";
+        if (newProductImagePreview) newProductImagePreview.src = productImagePlaceholder("New Product");
         await renderAdminInventory();
       } catch (err) {
         showMessage(productMessage, `Failed: ${err.message}`, false);
@@ -444,36 +490,141 @@
 
   function bindInventoryEditButtons(allInventory, refreshFn) {
     document.querySelectorAll("[data-edit-name]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
+      btn.addEventListener("click", () => {
         const productName = btn.getAttribute("data-edit-name");
         const item = allInventory.find((p) => String(p.name) === String(productName));
         if (!item) return;
-        const name = prompt("Edit name:", item.name);
-        if (name === null) return;
-        const category = prompt("Edit category:", item.category);
-        if (category === null) return;
-        const unit = prompt("Edit unit:", item.unit);
-        if (unit === null) return;
-        const priceRaw = prompt("Edit price:", String(item.price ?? 0));
-        if (priceRaw === null) return;
-        const stockRaw = prompt("Edit stock cases:", String(item.stockCases ?? 0));
-        if (stockRaw === null) return;
-
-        try {
-          await apiPatch(`/api/panel/admin/inventory/products/by-name/${encodeURIComponent(productName)}`, {
-            name: name.trim(),
-            category: category.trim(),
-            unit: unit.trim(),
-            price: toNum(priceRaw, 0),
-            stockCases: toNum(stockRaw, 0)
-          });
-          alert("Product updated.");
-          await refreshFn();
-        } catch (err) {
-          alert(`Failed to update product: ${err.message}`);
-        }
+        showInventoryEditModal(item, refreshFn);
       });
     });
+  }
+
+  function showInventoryEditModal(item, refreshFn) {
+    let modal = document.getElementById("inventoryEditModal");
+    if (!modal) {
+      modal = document.createElement("div");
+      modal.id = "inventoryEditModal";
+      modal.className = "modalOverlay";
+      modal.innerHTML = `
+        <div class="modalPanel">
+          <div class="modalHead">
+            <div style="font-weight:1100;font-size:18px;">Edit Product</div>
+            <button type="button" class="btn2" data-close-edit>Close</button>
+          </div>
+          <div class="modalBody">
+            <div class="field">
+              <label>Product name</label>
+              <input id="editProductName" />
+            </div>
+            <div class="field">
+              <label>Category</label>
+              <input id="editProductCategory" />
+            </div>
+            <div class="field">
+              <label>Unit</label>
+              <input id="editProductUnit" />
+            </div>
+            <div class="field">
+              <label>Price (per case)</label>
+              <input id="editProductPrice" type="number" min="0" step="0.01" />
+            </div>
+            <div class="field">
+              <label>Stock (cases)</label>
+              <input id="editProductStock" type="number" min="0" step="0.5" />
+            </div>
+            <div class="field">
+              <label>Product image</label>
+              <div class="imagePicker">
+                <img id="editProductImagePreview" class="imagePreview" alt="Product image preview" />
+                <div>
+                  <input id="editProductImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+                  <button id="clearEditProductImage" class="btn2" type="button">Clear Image</button>
+                </div>
+              </div>
+            </div>
+            <div id="editProductMessage" class="message" style="display:none;"></div>
+          </div>
+          <div class="modalActions">
+            <button type="button" class="btn2" data-close-edit>Cancel</button>
+            <button id="saveEditProduct" type="button" class="btn2">Save Product</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      modal.addEventListener("click", (e) => {
+        if (e.target === modal || e.target.closest("[data-close-edit]")) {
+          modal.style.display = "none";
+        }
+      });
+    }
+
+    const nameInput = modal.querySelector("#editProductName");
+    const categoryInput = modal.querySelector("#editProductCategory");
+    const unitInput = modal.querySelector("#editProductUnit");
+    const priceInput = modal.querySelector("#editProductPrice");
+    const stockInput = modal.querySelector("#editProductStock");
+    const imageInput = modal.querySelector("#editProductImage");
+    const preview = modal.querySelector("#editProductImagePreview");
+    const clearImageBtn = modal.querySelector("#clearEditProductImage");
+    const saveBtn = modal.querySelector("#saveEditProduct");
+    const message = modal.querySelector("#editProductMessage");
+    let clearImage = false;
+
+    const showMessage = (text, ok = true) => {
+      if (!message) return;
+      message.style.display = text ? "" : "none";
+      message.textContent = text || "";
+      message.className = `message ${ok ? "ok" : "err"}`;
+    };
+
+    nameInput.value = item.name || "";
+    categoryInput.value = item.category || "";
+    unitInput.value = item.unit || "";
+    priceInput.value = String(item.price ?? 0);
+    stockInput.value = String(item.stockCases ?? 0);
+    imageInput.value = "";
+    preview.src = item.image_url || productImagePlaceholder(item.name);
+    showMessage("");
+
+    imageInput.onchange = () => {
+      const file = imageInput.files?.[0];
+      clearImage = false;
+      preview.src = file ? URL.createObjectURL(file) : (item.image_url || productImagePlaceholder(item.name));
+    };
+    clearImageBtn.onclick = () => {
+      clearImage = true;
+      imageInput.value = "";
+      preview.src = productImagePlaceholder(item.name);
+    };
+    saveBtn.onclick = async () => {
+      const name = nameInput.value.trim();
+      const category = categoryInput.value.trim();
+      const unit = unitInput.value.trim();
+      const price = toNum(priceInput.value, 0);
+      const stockCases = toNum(stockInput.value, 0);
+      if (!name || !category || !unit) {
+        showMessage("Name, category, and unit are required.", false);
+        return;
+      }
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Saving...";
+      try {
+        const payload = { name, category, unit, price, stockCases };
+        const file = imageInput.files?.[0];
+        if (file) payload.imageUrl = await uploadProductImageFile(file);
+        else if (clearImage) payload.imageUrl = "";
+        await apiPatch(`/api/panel/admin/inventory/products/by-name/${encodeURIComponent(item.name)}`, payload);
+        modal.style.display = "none";
+        await refreshFn();
+      } catch (err) {
+        showMessage(`Failed: ${err.message}`, false);
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Save Product";
+      }
+    };
+
+    modal.style.display = "flex";
   }
 
   async function renderAdminCustomers() {

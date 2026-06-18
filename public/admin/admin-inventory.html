@@ -32,6 +32,18 @@
     .message{margin-top:8px;font-size:12px;font-weight:900}
     .message.ok{color:#0b7a33}
     .message.err{color:#b91c1c}
+    .imagePicker{display:grid;grid-template-columns:72px 1fr;gap:10px;align-items:center}
+    .imagePreview,.productThumb{width:64px;height:64px;border-radius:12px;border:1px solid rgba(229,231,235,.9);background:#f8fafc;object-fit:cover}
+    .productThumb{width:48px;height:48px;border-radius:10px}
+    .imagePicker input{padding:8px}
+    .modalOverlay{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:9999;padding:16px}
+    .modalPanel{width:min(680px,96vw);max-height:90vh;overflow:auto;background:#fff;border:1px solid rgba(229,231,235,.9);border-radius:18px;box-shadow:0 20px 40px rgba(15,23,42,.25)}
+    .modalHead{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid rgba(229,231,235,.9)}
+    .modalBody{padding:16px;display:grid;gap:10px}
+    .modalBody label{display:block;font-size:12px;font-weight:800;color:#64748b;margin-bottom:4px}
+    .modalBody input{width:100%;padding:10px;border-radius:12px;border:1px solid rgba(229,231,235,.9);font-weight:800}
+    .modalActions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;padding:14px 16px;border-top:1px solid rgba(229,231,235,.9)}
+    .modalActions .btn2{width:auto;margin-top:0;min-width:120px}
     @media(max-width:1000px){.flowGrid{grid-template-columns:1fr}}
     @media(max-width:900px){.forecast{grid-template-columns:1fr}}
   </style>
@@ -108,6 +120,13 @@
               <label>Initial stock (cases)</label>
               <input id="newProductStock" type="number" min="0" step="0.5" value="0" />
             </div>
+            <div class="field">
+              <label>Product image</label>
+              <div class="imagePicker">
+                <img id="newProductImagePreview" class="imagePreview" alt="Product image preview" />
+                <input id="newProductImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+              </div>
+            </div>
             <button id="addProductBtn" class="btn2" type="button">Add Product</button>
             <div id="productMessage" class="message" style="display:none;"></div>
           </div>
@@ -131,9 +150,9 @@
         <h3 style="margin:16px 0 0;font-weight:1000;">Product Inventory (Cases)</h3>
         <table>
           <thead>
-            <tr><th>Product</th><th>Stock (Cases)</th><th>Status</th><th>Action</th></tr>
+            <tr><th>Image</th><th>Product</th><th>Stock (Cases)</th><th>Status</th><th>Action</th></tr>
           </thead>
-          <tbody><tr><td colspan="6">Loading...</td></tr></tbody>
+          <tbody><tr><td colspan="5">Loading...</td></tr></tbody>
         </table>
 
         <div class="forecast">
