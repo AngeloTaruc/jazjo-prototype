@@ -48,7 +48,7 @@ test("validateCustomerRegistration requires first and last name", () => {
       lastName: "",
       email: "juan@example.com",
       contact: "09123456789",
-      address: "San Juan",
+      address: "San Juan City",
       password: "StrongPass1!"
     }),
     /First name and last name are required/
@@ -61,7 +61,7 @@ test("validateCustomerRegistration accepts valid Philippine contact and strong p
     lastName: "Dela Cruz",
     email: "JUAN@example.com",
     contact: "09123456789",
-    address: "San Juan",
+    address: "San Juan City",
     password: "StrongPass1!"
   });
 
@@ -77,7 +77,7 @@ test("validateCustomerRegistration rejects invalid Philippine contact", () => {
       lastName: "Dela Cruz",
       email: "juan@example.com",
       contact: "+639123456789",
-      address: "San Juan",
+      address: "San Juan City",
       password: "StrongPass1!"
     }),
     /Contact number must use Philippine format/

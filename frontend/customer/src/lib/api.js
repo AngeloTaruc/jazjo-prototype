@@ -1,5 +1,7 @@
 import { ORDERS_KEY, getToken, normalizeCategory, placeholderImage, readStorage, statusLabel } from "./customerLogic.js";
 
+const PSGC_API_BASE = "https://psgc.gitlab.io/api";
+
 async function request(path, options = {}) {
   const token = getToken();
   const res = await fetch(path, {
@@ -24,6 +26,32 @@ async function request(path, options = {}) {
     throw err;
   }
   return data;
+}
+
+async function psgcRequest(path) {
+  const res = await fetch(`${PSGC_API_BASE}${path}`, { cache: "force-cache" });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { error: text || "Invalid PSGC response" };
+  }
+  if (!res.ok) {
+    throw new Error(data?.error || data?.message || `PSGC request failed (${res.status})`);
+  }
+  return data;
+}
+
+function normalizePsgcList(data) {
+  return (Array.isArray(data) ? data : data?.data || [])
+    .map((entry) => ({
+      code: String(entry?.code || "").trim(),
+      name: String(entry?.name || "").trim(),
+      provinceCode: String(entry?.provinceCode || entry?.province_code || "").trim()
+    }))
+    .filter((entry) => entry.code && entry.name)
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function apiLogin(emailOrPayload, password) {
@@ -57,6 +85,31 @@ export async function apiProducts() {
     stockCases: Number(p.stockCases ?? p.stock_cases ?? 0),
     img: p.image_url || placeholderImage(p.name)
   }));
+}
+
+export async function apiProvinces() {
+  const data = await psgcRequest("/provinces/");
+  return normalizePsgcList(data);
+}
+
+export async function apiProvinceCities(provinceCode) {
+  if (!provinceCode) return [];
+  try {
+    const data = await psgcRequest(`/provinces/${encodeURIComponent(provinceCode)}/cities-municipalities/`);
+    return normalizePsgcList(data);
+  } catch (err) {
+    let list = [];
+    try {
+      list = normalizePsgcList(await psgcRequest("/cities-municipalities/"));
+    } catch {
+      const [cities, municipalities] = await Promise.all([
+        psgcRequest("/cities/").then(normalizePsgcList),
+        psgcRequest("/municipalities/").then(normalizePsgcList)
+      ]);
+      list = [...cities, ...municipalities];
+    }
+    return list.filter((entry) => entry.provinceCode === String(provinceCode));
+  }
 }
 
 export async function apiProfile() {

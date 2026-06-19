@@ -73,7 +73,9 @@ const PRODUCT_IMAGE_ALLOWED_TYPES = new Map([
   ["image/webp", "webp"],
   ["image/gif", "gif"]
 ]);
+const PSGC_API_BASE = "https://psgc.gitlab.io/api";
 const CUSTOMER_PENDING_ORDER_TTL_MS = 24 * 60 * 60 * 1000;
+const locationCache = new Map();
 
 function sendJson(res, status, body){
   res.writeHead(status, {
@@ -270,6 +272,105 @@ function validatePhilippineContact(contact){
   return normalized;
 }
 
+function normalizePsgcLocation(entry){
+  return {
+    code: String(entry?.code || "").trim(),
+    name: String(entry?.name || "").trim(),
+    provinceCode: String(entry?.provinceCode || entry?.province_code || "").trim()
+  };
+}
+
+async function fetchPsgc(pathname){
+  const key = pathname;
+  const cached = locationCache.get(key);
+  if(cached && cached.expiresAt > Date.now()) return cached.data;
+
+  const res = await fetch(`${PSGC_API_BASE}${pathname}`);
+  const text = await res.text();
+  let data = null;
+  try{
+    data = text ? JSON.parse(text) : null;
+  }catch{
+    data = null;
+  }
+  if(!res.ok){
+    throw httpError(data?.error || data?.message || `Failed to fetch PSGC data (${res.status}).`, 502);
+  }
+  locationCache.set(key, { data, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
+  return data;
+}
+
+async function listPsgcProvinces(){
+  const data = await fetchPsgc("/provinces/");
+  return (Array.isArray(data) ? data : data?.data || [])
+    .map(normalizePsgcLocation)
+    .filter((entry) => entry.code && entry.name)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function getPsgcProvince(provinceCode){
+  const code = String(provinceCode || "").trim();
+  if(!code) throw httpError("Please choose a province.");
+  const provinces = await listPsgcProvinces();
+  const province = provinces.find((entry) => entry.code === code);
+  if(!province){
+    throw httpError("Please choose a valid province.");
+  }
+  return province;
+}
+
+async function listPsgcProvinceCities(provinceCode){
+  const code = String(provinceCode || "").trim();
+  if(!code) throw httpError("Please choose a province.");
+  let rows = [];
+  try{
+    const data = await fetchPsgc(`/provinces/${encodeURIComponent(code)}/cities-municipalities/`);
+    rows = Array.isArray(data) ? data : data?.data || [];
+  }catch(err){
+    if(Number(err?.status || 0) !== 502 && Number(err?.status || 0) !== 404) throw err;
+    try{
+      const data = await fetchPsgc("/cities-municipalities/");
+      rows = Array.isArray(data) ? data : data?.data || [];
+    }catch(_fallbackErr){
+      const [cities, municipalities] = await Promise.all([
+        fetchPsgc("/cities/").catch(() => []),
+        fetchPsgc("/municipalities/").catch(() => [])
+      ]);
+      rows = [
+        ...(Array.isArray(cities) ? cities : cities?.data || []),
+        ...(Array.isArray(municipalities) ? municipalities : municipalities?.data || [])
+      ];
+    }
+  }
+  return rows
+    .map(normalizePsgcLocation)
+    .filter((entry) => entry.code && entry.name && (!entry.provinceCode || entry.provinceCode === code))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function validateDeliveryAddress(payload){
+  const provinceCode = String(payload?.provinceCode || payload?.province_code || "").trim();
+  const cityCode = String(payload?.cityCode || payload?.city_code || "").trim();
+  if(!provinceCode) throw httpError("Please choose a province.");
+  if(!cityCode) throw httpError("Please choose a city or municipality.");
+
+  const [province, cities] = await Promise.all([
+    getPsgcProvince(provinceCode),
+    listPsgcProvinceCities(provinceCode)
+  ]);
+  const city = cities.find((entry) => entry.code === cityCode);
+  if(!city){
+    throw httpError("Please choose a valid city or municipality for the selected province.");
+  }
+  return {
+    provinceCode: province.code,
+    provinceName: province.name,
+    cityCode: city.code,
+    cityName: city.name,
+    address: `${city.name}, ${province.name}`
+  };
+}
+
 function validatePasswordComplexity(password){
   const value = String(password || "");
   if(value.length < 8){
@@ -286,7 +387,6 @@ function validateCustomerRegistration(payload){
   const lastName = String(payload.lastName || payload.last_name || "").trim().replace(/\s+/g, " ");
   const fallbackFullName = String(payload.fullName || payload.full_name || "").trim().replace(/\s+/g, " ");
   const email = String(payload.email || "").trim().toLowerCase();
-  const address = String(payload.address || "").trim();
   const password = validatePasswordComplexity(payload.password);
   const contact = validatePhilippineContact(payload.contact);
 
@@ -295,12 +395,12 @@ function validateCustomerRegistration(payload){
       throw httpError("First name and last name are required.");
     }
   }
-  if(!email || !address){
-    throw httpError("email and address are required.");
+  if(!email){
+    throw httpError("email is required.");
   }
 
   const fullName = firstName && lastName ? `${firstName} ${lastName}` : fallbackFullName;
-  return { firstName, lastName, fullName, email, contact, address, password };
+  return { firstName, lastName, fullName, email, contact, password };
 }
 
 function toUiOrder(order, items = [], events = []){
@@ -373,7 +473,7 @@ async function updateProfileByEmail(email, payload){
   if(!profile) throw new Error("Profile not found.");
   const patch = {};
   if("full_name" in payload) patch.full_name = payload.full_name;
-  if("contact" in payload) patch.contact = payload.contact;
+  if("contact" in payload) patch.contact = validatePhilippineContact(payload.contact);
   if("address" in payload) patch.address = payload.address;
   if("email" in payload) patch.email = payload.email;
   const rows = await supabaseRequest(`/rest/v1/profiles?user_id=eq.${profile.user_id}`, {
@@ -1322,7 +1422,8 @@ async function upsertCustomerProfile({ userId, email, fullName, contact, address
 }
 
 async function registerCustomerAccount(payload){
-  const { email, password, fullName, contact, address } = validateCustomerRegistration(payload);
+  const { email, password, fullName, contact } = validateCustomerRegistration(payload);
+  const deliveryAddress = await validateDeliveryAddress(payload);
 
   const existing = await getProfileByEmail(email);
   if(existing){
@@ -1337,7 +1438,7 @@ async function registerCustomerAccount(payload){
 
   let profile = null;
   try{
-    profile = await upsertCustomerProfile({ userId, email, fullName, contact, address });
+    profile = await upsertCustomerProfile({ userId, email, fullName, contact, address: deliveryAddress.address });
   }catch(err){
     await supabaseAdminDeleteUser(userId).catch((_cleanupErr) => {});
     throw err;
@@ -1570,7 +1671,8 @@ function uiStatusToDbStatus(status){
 async function createOrder(payload, authProfile){
   const customerName = String(payload.customerName || "").trim();
   const contact = validatePhilippineContact(payload.contact);
-  const address = String(payload.address || "").trim();
+  const deliveryAddress = await validateDeliveryAddress(payload);
+  const address = deliveryAddress.address;
   const paymentMethod = String(payload.paymentMethod || "QRPH").trim();
   const rewardRedemptionId = String(payload.rewardRedemptionId || payload.reward_redemption_id || "").trim();
   const returnBaseUrl = normalizeReturnBaseUrl(payload.returnBaseUrl || payload.return_base_url || APP_BASE_URL);
@@ -2206,10 +2308,11 @@ async function handleApi(req, res, url){
     const auth = await requireAuth(req);
     const payload = await readJson(req);
     const contact = validatePhilippineContact(payload.contact || auth.profile.contact || "");
+    const deliveryAddress = await validateDeliveryAddress(payload);
     const profile = await updateProfileByEmail(auth.profile.email, {
       full_name: String(payload.fullName || payload.full_name || "").trim(),
       contact,
-      address: String(payload.address || "").trim()
+      address: deliveryAddress.address
     });
     sendJson(res, 200, { profile });
     return true;
@@ -2245,6 +2348,19 @@ async function handleApi(req, res, url){
   if(req.method === "GET" && url.pathname === "/api/products"){
     const products = await listProducts();
     sendJson(res, 200, { products });
+    return true;
+  }
+
+  if(req.method === "GET" && url.pathname === "/api/locations/provinces"){
+    const provinces = await listPsgcProvinces();
+    sendJson(res, 200, { provinces });
+    return true;
+  }
+
+  if(req.method === "GET" && url.pathname.startsWith("/api/locations/provinces/") && url.pathname.endsWith("/cities")){
+    const provinceCode = decodeURIComponent(url.pathname.replace("/api/locations/provinces/", "").replace("/cities", ""));
+    const cities = await listPsgcProvinceCities(provinceCode);
+    sendJson(res, 200, { cities });
     return true;
   }
 

@@ -41,6 +41,33 @@ export function validatePassword(password) {
   return { ok: true, value };
 }
 
+export function formatDeliveryAddress({ provinceName = "", cityName = "" } = {}) {
+  return [cityName, provinceName].map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+}
+
+export function validateDeliveryAddress(address = {}) {
+  const provinceCode = String(address.provinceCode || "").trim();
+  const provinceName = String(address.provinceName || "").trim();
+  const cityCode = String(address.cityCode || "").trim();
+  const cityName = String(address.cityName || "").trim();
+  if (!provinceCode || !provinceName) {
+    return { ok: false, message: "Please choose a province." };
+  }
+  if (!cityCode || !cityName) {
+    return { ok: false, message: "Please choose a city or municipality." };
+  }
+  return {
+    ok: true,
+    value: {
+      provinceCode,
+      provinceName,
+      cityCode,
+      cityName,
+      address: formatDeliveryAddress({ provinceName, cityName })
+    }
+  };
+}
+
 export function canAddCartQuantity({ existingQty = 0, addQty = 1, caseQty = 1, stockCases = 0 }) {
   const nextCases = (Number(existingQty || 0) + Number(addQty || 0)) * Number(caseQty || 1);
   const stock = Number(stockCases || 0);

@@ -15,7 +15,6 @@ import {
   ShoppingCart,
   Sun,
   Truck,
-  User,
   Warehouse,
   RefreshCw,
 } from "lucide-react";
@@ -172,9 +171,6 @@ export default function StaffPanel({ isDark, onToggleTheme }) {
           <div className="flex items-center gap-2">
             <Button size="sm" variant="light" isIconOnly onPress={onToggleTheme}>
               {isDark ? <Sun size={16} /> : <Moon size={16} />}
-            </Button>
-            <Button size="sm" variant="light" startContent={<User size={14} />} onPress={() => go("profile")}>
-              Profile
             </Button>
           </div>
         </header>

@@ -11,6 +11,7 @@ import {
   statusLabel,
   toggleFavoriteProduct,
   validateContact,
+  validateDeliveryAddress,
   validatePassword
 } from "../frontend/customer/src/lib/customerLogic.js";
 
@@ -91,6 +92,18 @@ test("canRepayOrder only allows pending unpaid QRPH orders", () => {
 test("validateContact requires Philippine mobile format", () => {
   assert.equal(validateContact("09123456789").ok, true);
   assert.equal(validateContact("+639123456789").ok, false);
+});
+
+test("validateDeliveryAddress requires province and city selections", () => {
+  const result = validateDeliveryAddress({
+    provinceCode: "012800000",
+    provinceName: "Ilocos Norte",
+    cityCode: "012805000",
+    cityName: "Laoag City"
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.address, "Laoag City, Ilocos Norte");
+  assert.equal(validateDeliveryAddress({ provinceCode: "012800000", provinceName: "Ilocos Norte" }).ok, false);
 });
 
 test("validatePassword requires complexity", () => {

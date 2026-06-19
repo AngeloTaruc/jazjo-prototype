@@ -16,7 +16,6 @@ import { Select } from "@heroui/react/select";
 import { Skeleton } from "@heroui/react/skeleton";
 import { Switch } from "@heroui/react/switch";
 import { Tabs } from "@heroui/react/tabs";
-import { TextArea as HeroTextArea } from "@heroui/react/textarea";
 import { Toast } from "@heroui/react/toast";
 import { Tooltip } from "@heroui/react/tooltip";
 import {
@@ -56,6 +55,8 @@ import {
   apiOrders,
   apiProducts,
   apiProfile,
+  apiProvinceCities,
+  apiProvinces,
   apiReconcilePayment,
   apiRepayOrder,
   apiRedeemReward,
@@ -82,6 +83,7 @@ import {
   statusLabel,
   toggleFavoriteProduct,
   validateContact,
+  validateDeliveryAddress,
   validatePassword,
   writeStorage,
 } from "./lib/customerLogic.js";
@@ -226,32 +228,143 @@ function Input({
   );
 }
 
-function Textarea({
-  label,
+function DeliveryAddressSelect({
   value,
   onValueChange,
   isRequired,
   className = "",
-  ...props
+  setMessage,
 }) {
+  const [provinces, setProvinces] = useState([]);
+  const [cities, setCities] = useState([]);
+  const [loadingProvinces, setLoadingProvinces] = useState(false);
+  const [loadingCities, setLoadingCities] = useState(false);
+  const selected = value || {};
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingProvinces(true);
+    apiProvinces()
+      .then((list) => {
+        if (!cancelled) setProvinces(list);
+      })
+      .catch((err) => setMessage?.(err.message))
+      .finally(() => {
+        if (!cancelled) setLoadingProvinces(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selected.provinceCode) {
+      setCities([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingCities(true);
+    apiProvinceCities(selected.provinceCode)
+      .then((list) => {
+        if (!cancelled) setCities(list);
+      })
+      .catch((err) => setMessage?.(err.message))
+      .finally(() => {
+        if (!cancelled) setLoadingCities(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected.provinceCode]);
+
+  const selectProvince = (code) => {
+    const province = provinces.find((entry) => entry.code === String(code));
+    onValueChange?.({
+      provinceCode: province?.code || "",
+      provinceName: province?.name || "",
+      cityCode: "",
+      cityName: "",
+    });
+  };
+
+  const selectCity = (code) => {
+    const city = cities.find((entry) => entry.code === String(code));
+    onValueChange?.({
+      ...selected,
+      cityCode: city?.code || "",
+      cityName: city?.name || "",
+    });
+  };
+
+  const selectTriggerClass = "min-h-11 rounded-xl border border-white/10 bg-white/[.06] px-3 text-left text-sm font-semibold text-slate-50";
+  const popoverClass = "max-h-72 min-w-64 overflow-y-auto rounded-2xl border border-white/10 bg-slate-950 p-1 shadow-2xl shadow-black/40";
+  const itemClass = "rounded-xl px-3 py-2 text-sm text-slate-100 data-[selected=true]:bg-emerald-500/20 data-[selected=true]:text-emerald-200";
+
   return (
-    <label
-      className={`grid gap-2 text-sm font-semibold text-slate-300 ${className}`}
-    >
-      {label ? (
-        <span>
-          {label}
-          {isRequired ? " *" : ""}
-        </span>
-      ) : null}
-      <HeroTextArea
-        {...props}
-        value={value}
-        required={isRequired}
-        onChange={(event) => onValueChange?.(event.target.value)}
-        className="min-h-24 w-full rounded-xl border border-white/10 bg-white/[.06] text-slate-50 outline-none"
-      />
-    </label>
+    <div className={`grid gap-3 ${className}`}>
+      <span className="text-sm font-semibold text-slate-300">
+        Delivery Address{isRequired ? " *" : ""}
+      </span>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Select
+          aria-label="Province"
+          selectedKey={selected.provinceCode || ""}
+          onSelectionChange={(key) => selectProvince(String(key))}
+          fullWidth
+          variant="bordered"
+        >
+          <Select.Trigger className={selectTriggerClass}>
+            <Select.Value>
+              {selected.provinceName || (loadingProvinces ? "Loading provinces..." : "Choose province")}
+            </Select.Value>
+            <Select.Indicator />
+          </Select.Trigger>
+          <Select.Popover placement="bottom start" className={popoverClass}>
+            <ListBox aria-label="Province" selectionMode="single">
+              {provinces.map((province) => (
+                <ListBox.Item
+                  id={province.code}
+                  key={province.code}
+                  textValue={province.name}
+                  className={itemClass}
+                >
+                  {province.name}
+                </ListBox.Item>
+              ))}
+            </ListBox>
+          </Select.Popover>
+        </Select>
+        <Select
+          aria-label="City or municipality"
+          selectedKey={selected.cityCode || ""}
+          onSelectionChange={(key) => selectCity(String(key))}
+          fullWidth
+          variant="bordered"
+          isDisabled={!selected.provinceCode}
+        >
+          <Select.Trigger className={selectTriggerClass}>
+            <Select.Value>
+              {selected.cityName || (loadingCities ? "Loading cities..." : "Choose city")}
+            </Select.Value>
+            <Select.Indicator />
+          </Select.Trigger>
+          <Select.Popover placement="bottom start" className={popoverClass}>
+            <ListBox aria-label="City or municipality" selectionMode="single">
+              {cities.map((city) => (
+                <ListBox.Item
+                  id={city.code}
+                  key={city.code}
+                  textValue={city.name}
+                  className={itemClass}
+                >
+                  {city.name}
+                </ListBox.Item>
+              ))}
+            </ListBox>
+          </Select.Popover>
+        </Select>
+      </div>
+    </div>
   );
 }
 
@@ -448,6 +561,15 @@ export default function App() {
       navigate("home");
     }
   }, [route]);
+
+  useEffect(() => {
+    if (!getToken() || isPanelRoute) return;
+    if (currentRole === "admin") {
+      navigate("admin/dashboard");
+    } else if (currentRole === "staff") {
+      navigate("staff/dashboard");
+    }
+  }, [route, currentRole, isPanelRoute]);
 
   const addToCart = (product, pack = PACK_OPTIONS[0]) => {
     const existing = cart.find(
@@ -1466,7 +1588,7 @@ function CartPage({ products, cart, setCart, refreshOrders, setMessage }) {
   const [form, setForm] = useState({
     customerName: "",
     contact: "",
-    address: "",
+    address: {},
     paymentMethod: "QRPH (GCash)",
   });
   const lines = cart
@@ -1512,8 +1634,11 @@ function CartPage({ products, cart, setCart, refreshOrders, setMessage }) {
     if (!lines.length) return setMessage("Your cart is empty.");
     const contact = validateContact(form.contact);
     if (!contact.ok) return setMessage(contact.message);
+    const address = validateDeliveryAddress(form.address);
+    if (!address.ok) return setMessage(address.message);
     const result = await apiCreateOrder({
       ...form,
+      ...address.value,
       returnBaseUrl: window.location.origin,
       items: lines.map((line) => ({
         productId: line.product.id,
@@ -1676,11 +1801,11 @@ function CartPage({ products, cart, setCart, refreshOrders, setMessage }) {
               onValueChange={(v) => setForm({ ...form, contact: v })}
               placeholder="09xxxxxxxxx"
             />
-            <Textarea
+            <DeliveryAddressSelect
               isRequired
-              label="Delivery Address"
               value={form.address}
               onValueChange={(v) => setForm({ ...form, address: v })}
+              setMessage={setMessage}
             />
             <div className="grid gap-2">
               <span className="text-sm font-semibold text-slate-300">
@@ -2260,7 +2385,7 @@ function ProfilePage({ setMessage }) {
     lastName: "",
     contact: "",
     email: "",
-    address: "",
+    address: {},
   });
   const [passwords, setPasswords] = useState({
     currentPassword: "",
@@ -2269,7 +2394,7 @@ function ProfilePage({ setMessage }) {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     apiProfile()
-      .then(setProfile)
+      .then((data) => setProfile({ ...data, address: {} }))
       .catch((err) => setMessage(err.message))
       .finally(() => setLoading(false));
   }, []);
@@ -2277,7 +2402,9 @@ function ProfilePage({ setMessage }) {
     event.preventDefault();
     const contact = validateContact(profile.contact);
     if (!contact.ok) return setMessage(contact.message);
-    await apiSaveProfile(profile);
+    const address = validateDeliveryAddress(profile.address);
+    if (!address.ok) return setMessage(address.message);
+    await apiSaveProfile({ ...profile, ...address.value });
     setMessage("Profile saved.");
   };
   const savePassword = async (event) => {
@@ -2352,11 +2479,11 @@ function ProfilePage({ setMessage }) {
               onValueChange={(v) => setProfile({ ...profile, contact: v })}
             />
             <Input label="Email" value={profile.email || ""} isReadOnly />
-            <Textarea
-              label="Address"
+            <DeliveryAddressSelect
               className="sm:col-span-2"
-              value={profile.address || ""}
+              value={profile.address || {}}
               onValueChange={(v) => setProfile({ ...profile, address: v })}
+              setMessage={setMessage}
             />
             <Button color="success" type="submit" className="sm:col-span-2">
               Save Profile
@@ -2478,7 +2605,7 @@ function RegisterPage({ onNavigate, setMessage }) {
     email: "",
     contact: "",
     password: "",
-    address: "",
+    address: {},
   });
   const [authMessage, setAuthMessage] = useState("");
   const register = async (event) => {
@@ -2490,8 +2617,10 @@ function RegisterPage({ onNavigate, setMessage }) {
     if (!contact.ok) return setAuthMessage(contact.message);
     const password = validatePassword(form.password);
     if (!password.ok) return setAuthMessage(password.message);
+    const address = validateDeliveryAddress(form.address);
+    if (!address.ok) return setAuthMessage(address.message);
     try {
-      await apiRegister(form);
+      await apiRegister({ ...form, ...address.value });
       setMessage("Account created. Please log in.");
       onNavigate("login");
     } catch (err) {
@@ -2547,10 +2676,11 @@ function RegisterPage({ onNavigate, setMessage }) {
           onValueChange={(v) => setForm({ ...form, password: v })}
           startContent={<LockKeyhole size={18} />}
         />
-        <Textarea
-          label="Address"
+        <DeliveryAddressSelect
+          isRequired
           value={form.address}
           onValueChange={(v) => setForm({ ...form, address: v })}
+          setMessage={setMessage}
           className="sm:col-span-2"
         />
         <Button
