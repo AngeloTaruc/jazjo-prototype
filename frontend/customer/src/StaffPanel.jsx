@@ -69,6 +69,52 @@ function Table({ children }) {
   return <table className="w-full text-left text-sm">{children}</table>;
 }
 
+function PanelPagination({ total, page, onChange, label }) {
+  if (total <= 1) return null;
+  return (
+    <Pagination
+      aria-label={label}
+      size="sm"
+      className="flex flex-wrap items-center justify-center gap-3"
+    >
+      <Pagination.Summary className="text-xs font-semibold text-slate-400">
+        Page {page} of {total}
+      </Pagination.Summary>
+      <Pagination.Content>
+        <Pagination.Item>
+          <Pagination.Previous
+            aria-label="Previous page"
+            isDisabled={page <= 1}
+            onPress={() => onChange(Math.max(1, page - 1))}
+          >
+            <Pagination.PreviousIcon />
+          </Pagination.Previous>
+        </Pagination.Item>
+        {Array.from({ length: total }, (_, index) => index + 1).map((pageNumber) => (
+          <Pagination.Item key={pageNumber}>
+            <Pagination.Link
+              aria-label={`Page ${pageNumber}`}
+              isActive={pageNumber === page}
+              onPress={() => onChange(pageNumber)}
+            >
+              {pageNumber}
+            </Pagination.Link>
+          </Pagination.Item>
+        ))}
+        <Pagination.Item>
+          <Pagination.Next
+            aria-label="Next page"
+            isDisabled={page >= total}
+            onPress={() => onChange(Math.min(total, page + 1))}
+          >
+            <Pagination.NextIcon />
+          </Pagination.Next>
+        </Pagination.Item>
+      </Pagination.Content>
+    </Pagination>
+  );
+}
+
 export default function StaffPanel({ isDark, onToggleTheme }) {
   const [route, setRoute] = useState(() => routeFromHash().replace("staff/", ""));
   const [message, setMessage] = useState("");
@@ -335,7 +381,7 @@ function StaffOrdersPage({ setMessage }) {
           </div>
           {totalPages > 1 ? (
             <div className="flex justify-center">
-              <Pagination total={totalPages} page={safePage} onChange={setPage} color="warning" size="sm" showControls showShadow />
+              <PanelPagination total={totalPages} page={safePage} onChange={setPage} label="Orders pagination" />
             </div>
           ) : null}
         </>
@@ -423,7 +469,7 @@ function StaffInventoryPage({ setMessage }) {
           </div>
           {totalPages > 1 ? (
             <div className="flex justify-center">
-              <Pagination total={totalPages} page={safePage} onChange={setPage} color="warning" size="sm" showControls showShadow />
+              <PanelPagination total={totalPages} page={safePage} onChange={setPage} label="Inventory pagination" />
             </div>
           ) : null}
         </>
@@ -535,7 +581,7 @@ function StaffDeliveryPage({ setMessage }) {
               </div>
               {totalPages > 1 ? (
                 <div className="mt-4 flex justify-center">
-                  <Pagination total={totalPages} page={safePage} onChange={setPage} color="warning" size="sm" showControls showShadow />
+                    <PanelPagination total={totalPages} page={safePage} onChange={setPage} label="Delivery pagination" />
                 </div>
               ) : null}
             </>

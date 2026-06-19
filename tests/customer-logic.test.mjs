@@ -8,6 +8,7 @@ import {
   isRetryablePaymentReason,
   normalizeCategory,
   paymentStatusLabel,
+  partitionProductsByFavorites,
   statusLabel,
   toggleFavoriteProduct,
   validateContact,
@@ -20,8 +21,8 @@ test("normalizeCategory maps brand categories into customer groups", () => {
   assert.equal(normalizeCategory("Nature Spring Distilled Water Products", "Nature Spring 500ML"), "Water");
   assert.equal(normalizeCategory("Cobra Products", "Cobra Green"), "Energy Drinks");
   assert.equal(normalizeCategory("C2 Drink Products", "C2 Apple"), "Juice");
-  assert.equal(normalizeCategory("RC Products", "RC Big 1 Liter"), "RC Products");
-  assert.equal(normalizeCategory("Juice/Tea", "C2 Lemon"), "Juice/Tea");
+  assert.equal(normalizeCategory("RC Products", "RC Big 1 Liter"), "Soft Drinks");
+  assert.equal(normalizeCategory("Juice/Tea", "C2 Lemon"), "Juice");
 });
 
 test("canAddCartQuantity blocks quantities above stock cases", () => {
@@ -53,6 +54,15 @@ test("toggleFavoriteProduct adds and removes a product id", () => {
 
   const removed = toggleFavoriteProduct(saved, "p1");
   assert.deepEqual(removed, ["p2"]);
+});
+
+test("partitionProductsByFavorites separates saved products without changing order", () => {
+  const products = [{ id: "p1" }, { id: "p2" }, { id: "p3" }, { id: "p4" }];
+  const result = partitionProductsByFavorites(products, ["p3", "p2"]);
+
+  assert.deepEqual(result.favoriteProducts.map((product) => product.id), ["p2", "p3"]);
+  assert.deepEqual(result.otherProducts.map((product) => product.id), ["p1", "p4"]);
+  assert.deepEqual(products.map((product) => product.id), ["p1", "p2", "p3", "p4"]);
 });
 
 test("statusLabel maps API status keys to customer labels", () => {

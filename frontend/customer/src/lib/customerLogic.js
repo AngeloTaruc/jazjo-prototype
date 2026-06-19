@@ -11,8 +11,8 @@ export function normalizeCategory(category, name = "") {
     .replace(/[-_]/g, " ")
     .replace(/\s+/g, " ");
   const text = `${raw} ${String(name || "").toLowerCase()}`;
-  if (raw === "rc products" || raw === "rc product") return "RC Products";
-  if (raw === "juice tea" || raw === "juice/tea" || raw === "tea") return "Juice/Tea";
+  if (raw === "rc products" || raw === "rc product") return "Soft Drinks";
+  if (raw === "juice tea" || raw === "juice/tea" || raw === "tea") return "Juice";
   if (raw === "softdrinks" || raw === "soft drink" || raw === "soft drinks") return "Soft Drinks";
   if (raw === "energy" || raw === "energy drink" || raw === "energy drinks") return "Energy Drinks";
   if (raw === "water") return "Water";
@@ -119,6 +119,18 @@ export function toggleFavoriteProduct(favorites = [], productId) {
   if (!id) return favorites;
   const current = favorites.map(String);
   return current.includes(id) ? current.filter((item) => item !== id) : [...current, id];
+}
+
+export function partitionProductsByFavorites(products = [], favorites = []) {
+  const saved = new Set(favorites.map(String));
+  return products.reduce(
+    (result, product) => {
+      const key = saved.has(String(product?.id)) ? "favoriteProducts" : "otherProducts";
+      result[key].push(product);
+      return result;
+    },
+    { favoriteProducts: [], otherProducts: [] },
+  );
 }
 
 export function formatQty(value) {

@@ -83,6 +83,7 @@ import {
   paymentStatusLabel,
   readStorage,
   saveSession,
+  partitionProductsByFavorites,
   statusLabel,
   toggleFavoriteProduct,
   validateContact,
@@ -92,7 +93,7 @@ import {
   writeStorage,
 } from "./lib/customerLogic.js";
 
-const CATEGORY_OPTIONS = ["Soft Drinks", "Water", "Energy Drinks", "Juice", "Juice/Tea", "RC Products"];
+const CATEGORY_OPTIONS = ["Soft Drinks", "Water", "Energy Drinks", "Juice"];
 const PACK_OPTIONS = [
   { label: "1 case", caseQty: 1 },
   { label: "Half case", caseQty: 0.5 },
@@ -888,13 +889,22 @@ function AppNav({
             <span className="flex items-center">
               <Switch
                 isSelected={isDark}
-                onValueChange={onToggleTheme}
+                onChange={onToggleTheme}
                 size="sm"
-                color="success"
-                startContent={<Sun size={14} />}
-                endContent={<Moon size={14} />}
                 aria-label="Toggle theme"
-              />
+              >
+                <Switch.Content>
+                  <Switch.Icon>
+                    <Sun size={14} />
+                  </Switch.Icon>
+                  <Switch.Control>
+                    <Switch.Thumb />
+                  </Switch.Control>
+                  <Switch.Icon>
+                    <Moon size={14} />
+                  </Switch.Icon>
+                </Switch.Content>
+              </Switch>
             </span>
           </Tooltip>
           {isCustomerArea ? (
@@ -1263,8 +1273,19 @@ function ProductCard({
       <Card className="group h-full border border-white/10 bg-slate-900/80 shadow-xl shadow-black/20 transition-shadow duration-300 hover:shadow-2xl hover:shadow-emerald-500/10">
         <CardBody className="gap-4">
           <div
-            className={`${compact ? "h-36" : "h-44"} rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-400/10 via-white/[.03] to-sky-400/10 p-3 transition-all duration-300 group-hover:border-emerald-500/30 group-hover:from-emerald-400/20`}
+            className={`relative ${compact ? "h-36" : "h-44"} rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-400/10 via-white/[.03] to-sky-400/10 p-3 transition-all duration-300 group-hover:border-emerald-500/30 group-hover:from-emerald-400/20`}
           >
+            {isFavorite ? (
+              <Chip
+                size="sm"
+                color="danger"
+                variant="solid"
+                className="absolute left-3 top-3 z-10"
+              >
+                <Heart size={12} fill="currentColor" />
+                Favorite
+              </Chip>
+            ) : null}
             <Image
               alt={product.name}
               className="h-full w-full object-contain drop-shadow-xl transition-transform duration-300 group-hover:scale-105"
@@ -1287,6 +1308,7 @@ function ProductCard({
             >
               <Button
                 size="sm"
+                isIconOnly
                 variant={isFavorite ? "solid" : "flat"}
                 color={isFavorite ? "danger" : "default"}
                 aria-label={isFavorite ? "Remove from saved" : "Save item"}
@@ -1395,13 +1417,20 @@ function ShopPage({
     return acc;
   }, {});
   categoryCounts["All Products"] = products.length;
-  const filtered = products.filter((product) => {
-    const text = `${product.name} ${product.category}`.toLowerCase();
-    return (
-      (category === "All Products" || product.category === category) &&
-      (!term || text.includes(term.toLowerCase()))
-    );
-  });
+  const filtered = useMemo(
+    () => products.filter((product) => {
+      const text = `${product.name} ${product.category}`.toLowerCase();
+      return (
+        (category === "All Products" || product.category === category) &&
+        (!term || text.includes(term.toLowerCase()))
+      );
+    }),
+    [products, category, term],
+  );
+  const { favoriteProducts, otherProducts } = useMemo(
+    () => partitionProductsByFavorites(filtered, favorites),
+    [filtered, favorites],
+  );
   const inStockCount = filtered.filter(
     (product) => Number(product.stockCases || 0) > 0,
   ).length;
@@ -1514,18 +1543,53 @@ function ShopPage({
           ) : null}
         </EmptyState>
       ) : null}
-      {!loading && filtered.length > 0 ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {filtered.map((product) => (
-            <ProductCard
-              key={product.id}
-              product={product}
-              onAdd={onAdd}
-              onToggleFavorite={onToggleFavorite}
-              isFavorite={favorites?.includes(String(product.id))}
-            />
-          ))}
-        </div>
+      {!loading && favoriteProducts.length > 0 ? (
+        <section className="space-y-4" aria-labelledby="favorite-products-title">
+          <div className="flex items-center gap-3">
+            <Heart size={20} className="text-rose-400" fill="currentColor" />
+            <h2 id="favorite-products-title" className="text-xl font-black">
+              Favorites
+            </h2>
+            <Chip size="sm" color="danger" variant="flat">
+              {favoriteProducts.length}
+            </Chip>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {favoriteProducts.map((product) => (
+              <ProductCard
+                key={product.id}
+                product={product}
+                onAdd={onAdd}
+                onToggleFavorite={onToggleFavorite}
+                isFavorite
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {!loading && otherProducts.length > 0 ? (
+        <section className="space-y-4" aria-labelledby="other-products-title">
+          <div className="flex items-center gap-3">
+            <Package size={20} className="text-emerald-400" />
+            <h2 id="other-products-title" className="text-xl font-black">
+              {category === "All Products" ? "All Products" : category}
+            </h2>
+            <Chip size="sm" color="success" variant="flat">
+              {otherProducts.length}
+            </Chip>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {otherProducts.map((product) => (
+              <ProductCard
+                key={product.id}
+                product={product}
+                onAdd={onAdd}
+                onToggleFavorite={onToggleFavorite}
+                isFavorite={false}
+              />
+            ))}
+          </div>
+        </section>
       ) : null}
       {publicMode ? (
         <Card className="border border-success/20 bg-success/10">
