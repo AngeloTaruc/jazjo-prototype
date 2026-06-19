@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   canAddCartQuantity,
+  isRetryablePaymentReason,
   normalizeCategory,
   statusLabel,
   toggleFavoriteProduct,
@@ -52,6 +53,12 @@ test("statusLabel maps API status keys to customer labels", () => {
   assert.equal(statusLabel("order_placed"), "Order Placed");
   assert.equal(statusLabel("out_for_delivery"), "Out for Delivery");
   assert.equal(statusLabel("delivered"), "Delivered");
+});
+
+test("isRetryablePaymentReason flags asynchronous QRPH states", () => {
+  assert.equal(isRetryablePaymentReason("processing"), true);
+  assert.equal(isRetryablePaymentReason("still_pending"), true);
+  assert.equal(isRetryablePaymentReason("paid"), false);
 });
 
 test("validateContact requires Philippine mobile format", () => {

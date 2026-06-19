@@ -77,6 +77,12 @@ export function statusLabel(status) {
   return map[status] || status || "Order Placed";
 }
 
+export function isRetryablePaymentReason(reason) {
+  return ["processing", "still_pending", "active", "pending"].includes(
+    String(reason || "").toLowerCase(),
+  );
+}
+
 export function currentCustomerEmail() {
   return localStorage.getItem("jazjo_user") || "customer@jazjo.com";
 }

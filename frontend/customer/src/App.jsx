@@ -72,6 +72,7 @@ import {
   currentCustomerEmail,
   formatQty,
   getToken,
+  isRetryablePaymentReason,
   money,
   readStorage,
   saveSession,
@@ -282,6 +283,12 @@ function toastVariant(message) {
   return "info";
 }
 
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function useHashRoute() {
   const [route, setRoute] = useState(routeFromHash());
   useEffect(() => {
@@ -358,17 +365,43 @@ export default function App() {
   useEffect(() => {
     const paid = new URLSearchParams(window.location.search).get("paid");
     if (!paid) return;
-    apiReconcilePayment(paid)
-      .then(() => {
-        setCart([]);
-        return refreshOrders();
+    let cancelled = false;
+    const reconcileWithRetry = async () => {
+      let latest = null;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        latest = await apiReconcilePayment(paid);
+        if (latest.reconciled || latest.alreadyPaid) return latest;
+        if (!isRetryablePaymentReason(latest.reason)) return latest;
+        await wait(2500);
+      }
+      return latest;
+    };
+
+    setMessage("Checking QRPH payment...");
+    reconcileWithRetry()
+      .then(async (result) => {
+        if (cancelled) return;
+        if (result?.reconciled || result?.alreadyPaid) {
+          setCart([]);
+          await refreshOrders();
+          setMessage(`Payment confirmed for ${paid}.`);
+          return;
+        }
+        await refreshOrders().catch(() => {});
+        setMessage("Payment was received by PayMongo. Confirmation is still processing, please tap Check Payment in Orders.");
+      })
+      .catch((err) => {
+        if (!cancelled) setMessage(err.message);
       })
       .finally(() => {
+        if (cancelled) return;
         const nextUrl = `${window.location.pathname}${window.location.hash || "#/orders"}`;
         window.history.replaceState({}, "", nextUrl);
         navigate("orders");
-      })
-      .catch((err) => setMessage(err.message));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
