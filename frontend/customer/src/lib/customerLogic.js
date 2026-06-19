@@ -11,6 +11,8 @@ export function normalizeCategory(category, name = "") {
     .replace(/[-_]/g, " ")
     .replace(/\s+/g, " ");
   const text = `${raw} ${String(name || "").toLowerCase()}`;
+  if (raw === "rc products" || raw === "rc product") return "RC Products";
+  if (raw === "juice tea" || raw === "juice/tea" || raw === "tea") return "Juice/Tea";
   if (raw === "softdrinks" || raw === "soft drink" || raw === "soft drinks") return "Soft Drinks";
   if (raw === "energy" || raw === "energy drink" || raw === "energy drinks") return "Energy Drinks";
   if (raw === "water") return "Water";

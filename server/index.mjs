@@ -469,12 +469,13 @@ async function deleteAdminCategory(name){
   if(!existing){
     return await listAdminCategories();
   }
-  await supabaseRequest(`/rest/v1/products?category_id=eq.${encodeURIComponent(existing.id)}`, {
-    method: "PATCH",
-    serviceRole: true,
-    headers: { Prefer: "return=minimal" },
-    body: { category_id: null }
-  });
+  const assignedProducts = await supabaseRequest(
+    `/rest/v1/products?select=id&category_id=eq.${encodeURIComponent(existing.id)}&limit=1`,
+    { serviceRole: true }
+  );
+  if(assignedProducts.length){
+    throw httpError(`Cannot delete "${existing.name}" because products are still assigned to it. Move or delete those products first.`, 409);
+  }
   await supabaseRequest(`/rest/v1/categories?id=eq.${encodeURIComponent(existing.id)}`, {
     method: "DELETE",
     serviceRole: true

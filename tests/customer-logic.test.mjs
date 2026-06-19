@@ -19,6 +19,8 @@ test("normalizeCategory maps brand categories into customer groups", () => {
   assert.equal(normalizeCategory("Nature Spring Distilled Water Products", "Nature Spring 500ML"), "Water");
   assert.equal(normalizeCategory("Cobra Products", "Cobra Green"), "Energy Drinks");
   assert.equal(normalizeCategory("C2 Drink Products", "C2 Apple"), "Juice");
+  assert.equal(normalizeCategory("RC Products", "RC Big 1 Liter"), "RC Products");
+  assert.equal(normalizeCategory("Juice/Tea", "C2 Lemon"), "Juice/Tea");
 });
 
 test("canAddCartQuantity blocks quantities above stock cases", () => {

@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Alert } from "@heroui/react/alert";
 import { Avatar } from "@heroui/react/avatar";
@@ -10,7 +10,6 @@ import { EmptyState } from "@heroui/react/empty-state";
 import { Input as HeroInput } from "@heroui/react/input";
 import { ListBox } from "@heroui/react/list-box";
 import { Modal } from "@heroui/react/modal";
-import { Pagination } from "@heroui/react/pagination";
 import { Popover } from "@heroui/react/popover";
 import { ProgressBar } from "@heroui/react/progress-bar";
 import { Select } from "@heroui/react/select";
@@ -87,7 +86,7 @@ import {
   writeStorage,
 } from "./lib/customerLogic.js";
 
-const CATEGORY_OPTIONS = ["Soft Drinks", "Water", "Energy Drinks", "Juice"];
+const CATEGORY_OPTIONS = ["Soft Drinks", "Water", "Energy Drinks", "Juice", "Juice/Tea", "RC Products"];
 const PACK_OPTIONS = [
   { label: "1 case", caseQty: 1 },
   { label: "Half case", caseQty: 0.5 },
@@ -1209,32 +1208,31 @@ function ShopPage({
   onToggleFavorite,
 }) {
   const [term, setTerm] = useState("");
-  const [category, setCategory] = useState("Soft Drinks");
-  const [page, setPage] = useState(1);
-  const perPage = 8;
+  const [category, setCategory] = useState("All Products");
+  const visibleCategories = useMemo(() => {
+    const categories = CATEGORY_OPTIONS.filter((item) =>
+      products.some((product) => product.category === item),
+    );
+    return ["All Products", ...(categories.length ? categories : CATEGORY_OPTIONS.slice(0, 4))];
+  }, [products]);
   const categoryCounts = CATEGORY_OPTIONS.reduce((acc, item) => {
     acc[item] = products.filter((product) => product.category === item).length;
     return acc;
   }, {});
+  categoryCounts["All Products"] = products.length;
   const filtered = products.filter((product) => {
     const text = `${product.name} ${product.category}`.toLowerCase();
     return (
-      product.category === category &&
+      (category === "All Products" || product.category === category) &&
       (!term || text.includes(term.toLowerCase()))
     );
   });
   const inStockCount = filtered.filter(
     (product) => Number(product.stockCases || 0) > 0,
   ).length;
-  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
-  const safePage = Math.min(page, totalPages);
-  const paged = filtered.slice((safePage - 1) * perPage, safePage * perPage);
   useEffect(() => {
-    if (!CATEGORY_OPTIONS.includes(category)) setCategory(CATEGORY_OPTIONS[0]);
-  }, [category]);
-  useEffect(() => {
-    setPage(1);
-  }, [category, term]);
+    if (!visibleCategories.includes(category)) setCategory(visibleCategories[0]);
+  }, [category, visibleCategories]);
   const skeletonItems = Array.from({ length: 4 }, (_, i) => i);
   return (
     <motion.section
@@ -1256,7 +1254,7 @@ function ShopPage({
         size="sm"
       >
         <Tabs.List className="gap-0 border-b border-white/10">
-          {CATEGORY_OPTIONS.map((item) => (
+          {visibleCategories.map((item) => (
             <Tabs.Tab
               id={item}
               key={item}
@@ -1289,7 +1287,7 @@ function ShopPage({
                 startContent={<Search size={18} />}
                 value={term}
                 onValueChange={setTerm}
-                placeholder={`Search ${category.toLowerCase()}...`}
+                placeholder={category === "All Products" ? "Search all products..." : `Search ${category.toLowerCase()}...`}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") event.preventDefault();
                 }}
@@ -1342,32 +1340,17 @@ function ShopPage({
         </EmptyState>
       ) : null}
       {!loading && filtered.length > 0 ? (
-        <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {paged.map((product) => (
-              <ProductCard
-                key={product.id}
-                product={product}
-                onAdd={onAdd}
-                onToggleFavorite={onToggleFavorite}
-                isFavorite={favorites?.includes(String(product.id))}
-              />
-            ))}
-          </div>
-          {totalPages > 1 ? (
-            <div className="flex justify-center">
-              <Pagination
-                total={totalPages}
-                page={safePage}
-                onChange={setPage}
-                color="success"
-                size="sm"
-                showControls
-                showShadow
-              />
-            </div>
-          ) : null}
-        </>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {filtered.map((product) => (
+            <ProductCard
+              key={product.id}
+              product={product}
+              onAdd={onAdd}
+              onToggleFavorite={onToggleFavorite}
+              isFavorite={favorites?.includes(String(product.id))}
+            />
+          ))}
+        </div>
       ) : null}
       {publicMode ? (
         <Card className="border border-success/20 bg-success/10">
@@ -2998,3 +2981,4 @@ function CustomerFooter({ isDark }) {
     </footer>
   );
 }
+
