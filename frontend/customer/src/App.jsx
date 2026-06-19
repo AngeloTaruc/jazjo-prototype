@@ -536,13 +536,15 @@ export default function App() {
                     setMessage={setMessage}
                   />
                 )}
-                {route === "orders" && (
-                  <OrdersPage
-                    orders={orders}
-                    refreshOrders={refreshOrders}
-                    onNavigate={navigate}
-                  />
-                )}
+        {route === "orders" && (
+          <OrdersPage
+            orders={orders}
+            refreshOrders={refreshOrders}
+            onNavigate={navigate}
+            setMessage={setMessage}
+            setCart={setCart}
+          />
+        )}
                 {route.startsWith("order/") && (
                   <OrderDetailsPage
                     id={route.replace("order/", "")}
@@ -1466,6 +1468,7 @@ function CartPage({ products, cart, setCart, refreshOrders, setMessage }) {
     if (!contact.ok) return setMessage(contact.message);
     const result = await apiCreateOrder({
       ...form,
+      returnBaseUrl: window.location.origin,
       items: lines.map((line) => ({
         productId: line.product.id,
         qty: line.caseTotal,
@@ -1669,10 +1672,11 @@ function CartPage({ products, cart, setCart, refreshOrders, setMessage }) {
   );
 }
 
-function OrdersPage({ orders, refreshOrders, onNavigate }) {
+function OrdersPage({ orders, refreshOrders, onNavigate, setMessage, setCart }) {
   const [statusFilter, setStatusFilter] = useState("All");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [checkingPayment, setCheckingPayment] = useState("");
   useEffect(() => {
     setLoading(true);
     refreshOrders()
@@ -1717,6 +1721,23 @@ function OrdersPage({ orders, refreshOrders, onNavigate }) {
     0,
   );
   const latestOrder = orders[0];
+  const checkPayment = async (order) => {
+    setCheckingPayment(order.id);
+    try {
+      const result = await apiReconcilePayment(order.id);
+      if (result.reconciled || result.alreadyPaid) {
+        setCart?.([]);
+        setMessage?.(`Payment confirmed for ${order.id}.`);
+        await refreshOrders();
+      } else {
+        setMessage?.("Payment is still pending. If you just paid, try again in a few seconds.");
+      }
+    } catch (err) {
+      setMessage?.(err.message || "Unable to check payment right now.");
+    } finally {
+      setCheckingPayment("");
+    }
+  };
   if (loading) {
     return (
       <section className="space-y-5">
@@ -1795,6 +1816,16 @@ function OrdersPage({ orders, refreshOrders, onNavigate }) {
               >
                 View Details
               </Button>
+              {statusLabel(latestOrder.status) === "Pending Payment" ? (
+                <Button
+                  color="warning"
+                  variant="flat"
+                  isDisabled={checkingPayment === latestOrder.id}
+                  onPress={() => checkPayment(latestOrder)}
+                >
+                  Check Payment
+                </Button>
+              ) : null}
             </div>
           </CardBody>
         </Card>
@@ -1839,6 +1870,8 @@ function OrdersPage({ orders, refreshOrders, onNavigate }) {
             order={order}
             index={idx}
             onNavigate={onNavigate}
+            onCheckPayment={checkPayment}
+            isCheckingPayment={checkingPayment === order.id}
           />
         ))}
         {!loading && filtered.length === 0 ? (
@@ -2569,7 +2602,7 @@ function OrderStatusChip({ status }) {
   );
 }
 
-function OrderListCard({ order, index, onNavigate }) {
+function OrderListCard({ order, index, onNavigate, onCheckPayment, isCheckingPayment }) {
   const label = statusLabel(order.status);
   const itemSummary =
     (order.items || [])
@@ -2614,6 +2647,17 @@ function OrderListCard({ order, index, onNavigate }) {
                   View
                 </Button>
               </Tooltip>
+              {label === "Pending Payment" ? (
+                <Button
+                  color="warning"
+                  variant="flat"
+                  size="sm"
+                  isDisabled={isCheckingPayment}
+                  onPress={() => onCheckPayment?.(order)}
+                >
+                  Check Payment
+                </Button>
+              ) : null}
             </div>
           </div>
           <Progress value={statusProgress(label)} />
