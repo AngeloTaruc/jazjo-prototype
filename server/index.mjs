@@ -305,6 +305,7 @@ function toUiOrder(order, items = [], events = []){
     contact: order.contact,
     address: order.address,
     paymentMethod: order.payment_method || "QRPH",
+    paymentStatus: order.payment_status || "",
     subtotal: Number(order.subtotal || 0),
     deliveryFee: Number(order.delivery_fee || 0),
     total: Number(order.total || 0),
@@ -1437,6 +1438,35 @@ function verifyPaymongoWebhookSignature(rawBody, headerValue){
   return candidates.some((c) => c === expected);
 }
 
+function parsePaymongoWebhookEvent(event){
+  const eventId = event?.data?.id || event?.id || "";
+  const eventType = event?.data?.attributes?.type || event?.type || "";
+  const resource = event?.data?.attributes?.data || event?.data?.attributes?.resource || event?.resource || {};
+  const resourceId = resource?.id || null;
+  const resourceAttr = resource?.attributes || {};
+  const metadata =
+    resourceAttr?.metadata ||
+    resourceAttr?.checkout_session?.metadata ||
+    resourceAttr?.checkout?.metadata ||
+    {};
+  const firstPayment =
+    (Array.isArray(resourceAttr?.payments) && resourceAttr.payments[0]) ||
+    (Array.isArray(resourceAttr?.payment_intent?.attributes?.payments) && resourceAttr.payment_intent.attributes.payments[0]) ||
+    null;
+
+  return {
+    eventId,
+    eventType,
+    resourceId,
+    orderCode: metadata?.order_code || null,
+    checkoutSessionId: eventType === "checkout_session.payment.paid" ? resourceId : null,
+    paymentId:
+      firstPayment?.id ||
+      firstPayment?.attributes?.id ||
+      (eventType === "payment.paid" ? resourceId : null)
+  };
+}
+
 async function listOrdersForEmail(email){
   const profile = await getProfileByEmail(email);
   if(!profile) return [];
@@ -1804,7 +1834,7 @@ async function markOrderPaidFromWebhook({ orderCode, checkoutSessionId, paymentI
     body: {
       status: "paid",
       provider_event_id: eventId,
-      provider_checkout_session_id: checkoutSessionId || null,
+      provider_checkout_session_id: checkoutSessionId || order.paymongo_checkout_session_id || null,
       provider_payment_id: paymentId || null,
       raw_payload: rawPayload
     }
@@ -1935,22 +1965,14 @@ async function handleApi(req, res, url){
       return true;
     }
     const event = rawBody ? JSON.parse(rawBody) : {};
-    const eventId = event?.data?.id || event?.id || "";
-    const eventType = event?.data?.attributes?.type || event?.type || "";
-    const resource = event?.data?.attributes?.data || event?.data?.attributes?.resource || event?.resource || {};
-    const resourceId = resource?.id || null;
-    const resourceAttr = resource?.attributes || {};
-    const metadata =
-      resourceAttr?.metadata ||
-      resourceAttr?.checkout_session?.metadata ||
-      resourceAttr?.checkout?.metadata ||
-      {};
-    const orderCode = metadata?.order_code || null;
-    const firstPayment =
-      (Array.isArray(resourceAttr?.payments) && resourceAttr.payments[0]) ||
-      (Array.isArray(resourceAttr?.payment_intent?.attributes?.payments) && resourceAttr.payment_intent.attributes.payments[0]) ||
-      null;
-    const paymentId = firstPayment?.id || firstPayment?.attributes?.id || null;
+    const {
+      eventId,
+      eventType,
+      resourceId,
+      orderCode,
+      checkoutSessionId,
+      paymentId
+    } = parsePaymongoWebhookEvent(event);
 
     console.log("[paymongo webhook] event", {
       eventId,
@@ -1963,7 +1985,7 @@ async function handleApi(req, res, url){
     if(eventType === "checkout_session.payment.paid" || eventType === "payment.paid"){
       await markOrderPaidFromWebhook({
         orderCode,
-        checkoutSessionId: resourceId,
+        checkoutSessionId,
         paymentId,
         eventId,
         rawPayload: event
@@ -2285,6 +2307,7 @@ export {
   handleRequest,
   isPaymongoProcessingStatusError,
   normalizeReturnBaseUrl,
+  parsePaymongoWebhookEvent,
   parseProductImagePayload,
   validateCustomerRegistration,
   validatePasswordComplexity,

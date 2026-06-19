@@ -100,3 +100,50 @@ test("isPaymongoProcessingStatusError detects asynchronous source state", () => 
   assert.equal(server.isPaymongoProcessingStatusError(new Error("Source src_123 has processing status")), true);
   assert.equal(server.isPaymongoProcessingStatusError(new Error("Invalid token")), false);
 });
+
+test("parsePaymongoWebhookEvent extracts checkout session payment events", () => {
+  const parsed = server.parsePaymongoWebhookEvent({
+    data: {
+      id: "evt_123",
+      attributes: {
+        type: "checkout_session.payment.paid",
+        data: {
+          id: "cs_123",
+          attributes: {
+            metadata: { order_code: "ORD-20260619-001" },
+            payments: [{ id: "pay_123", attributes: { status: "paid" } }]
+          }
+        }
+      }
+    }
+  });
+
+  assert.equal(parsed.eventId, "evt_123");
+  assert.equal(parsed.eventType, "checkout_session.payment.paid");
+  assert.equal(parsed.orderCode, "ORD-20260619-001");
+  assert.equal(parsed.checkoutSessionId, "cs_123");
+  assert.equal(parsed.paymentId, "pay_123");
+});
+
+test("parsePaymongoWebhookEvent does not treat payment id as checkout session id", () => {
+  const parsed = server.parsePaymongoWebhookEvent({
+    data: {
+      id: "evt_456",
+      attributes: {
+        type: "payment.paid",
+        data: {
+          id: "pay_456",
+          attributes: {
+            metadata: { order_code: "ORD-20260619-002" },
+            status: "paid"
+          }
+        }
+      }
+    }
+  });
+
+  assert.equal(parsed.eventType, "payment.paid");
+  assert.equal(parsed.orderCode, "ORD-20260619-002");
+  assert.equal(parsed.checkoutSessionId, null);
+  assert.equal(parsed.paymentId, "pay_456");
+});

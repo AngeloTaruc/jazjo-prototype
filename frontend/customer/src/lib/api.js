@@ -229,6 +229,7 @@ export function normalizeOrder(order) {
     contact: order.contact || "",
     address: order.address || "",
     paymentMethod: order.paymentMethod || order.payment_method || "QRPH",
+    paymentStatus: order.paymentStatus || order.payment_status || "",
     subtotal: Number(order.subtotal || 0),
     deliveryFee: Number(order.deliveryFee ?? order.delivery_fee ?? 0),
     total: Number(order.total || 0),

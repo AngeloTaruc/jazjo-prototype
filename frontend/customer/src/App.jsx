@@ -74,6 +74,7 @@ import {
   getToken,
   isRetryablePaymentReason,
   money,
+  paymentStatusLabel,
   readStorage,
   saveSession,
   statusLabel,
@@ -574,6 +575,7 @@ export default function App() {
                     orders={orders}
                     refreshOrders={refreshOrders}
                     onNavigate={navigate}
+                    setMessage={setMessage}
                   />
                 )}
                 {route.startsWith("order/") && (
@@ -1703,10 +1705,11 @@ function CartPage({ products, cart, setCart, refreshOrders, setMessage }) {
   );
 }
 
-function OrdersPage({ orders, refreshOrders, onNavigate }) {
+function OrdersPage({ orders, refreshOrders, onNavigate, setMessage }) {
   const [statusFilter, setStatusFilter] = useState("All");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [checkingPayment, setCheckingPayment] = useState("");
   useEffect(() => {
     setLoading(true);
     refreshOrders()
@@ -1718,6 +1721,25 @@ function OrdersPage({ orders, refreshOrders, onNavigate }) {
       )
       .finally(() => setLoading(false));
   }, []);
+  const checkPayment = async (order) => {
+    if (!order?.id) return;
+    setCheckingPayment(order.id);
+    try {
+      const result = await apiReconcilePayment(order.id);
+      await refreshOrders();
+      if (result.reconciled || result.alreadyPaid) {
+        setMessage?.(`Payment confirmed for ${order.id}.`);
+      } else if (isRetryablePaymentReason(result.reason)) {
+        setMessage?.("QRPH payment is still processing. Please try again shortly.");
+      } else {
+        setMessage?.("PayMongo has not confirmed this QRPH payment yet.");
+      }
+    } catch (err) {
+      setMessage?.(err.message || "Unable to check payment right now.");
+    } finally {
+      setCheckingPayment("");
+    }
+  };
   const statuses = [
     "All",
     "Pending Payment",
@@ -1750,6 +1772,7 @@ function OrdersPage({ orders, refreshOrders, onNavigate }) {
     (sum, order) => sum + Number(order.total || 0),
     0,
   );
+  const pendingPaymentCount = orders.filter(isPendingPaymentOrder).length;
   const latestOrder = orders[0];
   if (loading) {
     return (
@@ -1790,6 +1813,16 @@ function OrdersPage({ orders, refreshOrders, onNavigate }) {
           </Alert.Content>
         </Alert>
       ) : null}
+      {pendingPaymentCount ? (
+        <Alert status="warning" variant="flat">
+          <Alert.Content>
+            <Alert.Title>QRPH payment pending</Alert.Title>
+            <Alert.Description>
+              {pendingPaymentCount} order(s) are waiting for PayMongo confirmation.
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+      ) : null}
       <div className="grid gap-4 sm:grid-cols-3">
         <Metric label="Active Orders" value={activeOrders} />
         <Metric label="Delivered" value={deliveredOrders} />
@@ -1820,9 +1853,21 @@ function OrdersPage({ orders, refreshOrders, onNavigate }) {
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <OrderStatusChip status={latestOrder.status} />
+              <PaymentStatusChip order={latestOrder} />
               <strong className="text-xl text-white">
                 {money(latestOrder.total)}
               </strong>
+              {isPendingPaymentOrder(latestOrder) ? (
+                <Button
+                  color="warning"
+                  variant="flat"
+                  isDisabled={checkingPayment === latestOrder.id}
+                  onPress={() => checkPayment(latestOrder)}
+                >
+                  <CreditCard size={16} />
+                  {checkingPayment === latestOrder.id ? "Checking..." : "Check Payment"}
+                </Button>
+              ) : null}
               <Button
                 color="success"
                 onPress={() => onNavigate(`order/${latestOrder.id}`)}
@@ -1873,6 +1918,8 @@ function OrdersPage({ orders, refreshOrders, onNavigate }) {
             order={order}
             index={idx}
             onNavigate={onNavigate}
+            onCheckPayment={checkPayment}
+            isCheckingPayment={checkingPayment === order.id}
           />
         ))}
         {!loading && filtered.length === 0 ? (
@@ -1966,13 +2013,16 @@ function OrderDetailsPage({ id, onNavigate }) {
               </p>
             </div>
           </div>
-          <OrderStatusChip status={label} />
+          <div className="flex flex-wrap items-center gap-2">
+            <OrderStatusChip status={label} />
+            <PaymentStatusChip order={order} />
+          </div>
         </CardHeader>
         <CardBody className="gap-5 p-6">
           <div className="grid gap-4 md:grid-cols-3">
             <DetailTile
               label="Payment"
-              value={order.paymentMethod || "QRPH"}
+              value={`${order.paymentMethod || "QRPH"} - ${paymentStatusLabel(order.paymentStatus, order.status)}`}
               icon={<CreditCard size={18} />}
             />
             <DetailTile
@@ -2580,6 +2630,20 @@ function statusColor(status) {
   return "warning";
 }
 
+function paymentStatusColor(label) {
+  if (label === "Paid") return "success";
+  if (label === "Failed" || label === "Cancelled") return "danger";
+  if (label === "Processing" || label === "Awaiting QRPH") return "warning";
+  return "default";
+}
+
+function isPendingPaymentOrder(order) {
+  return (
+    statusLabel(order?.status) === "Pending Payment" &&
+    paymentStatusLabel(order?.paymentStatus, order?.status) !== "Paid"
+  );
+}
+
 function statusProgress(status) {
   const label = statusLabel(status);
   const map = {
@@ -2603,7 +2667,22 @@ function OrderStatusChip({ status }) {
   );
 }
 
-function OrderListCard({ order, index, onNavigate }) {
+function PaymentStatusChip({ order }) {
+  const label = paymentStatusLabel(order?.paymentStatus, order?.status);
+  return (
+    <Chip color={paymentStatusColor(label)} variant="flat" size="sm">
+      {label}
+    </Chip>
+  );
+}
+
+function OrderListCard({
+  order,
+  index,
+  onNavigate,
+  onCheckPayment,
+  isCheckingPayment,
+}) {
   const label = statusLabel(order.status);
   const itemSummary =
     (order.items || [])
@@ -2625,6 +2704,7 @@ function OrderListCard({ order, index, onNavigate }) {
                 <div className="flex flex-wrap items-center gap-2">
                   <strong className="truncate text-white">{order.id}</strong>
                   <OrderStatusChip status={label} />
+                  <PaymentStatusChip order={order} />
                 </div>
                 <p className="text-xs text-slate-400">
                   {order.createdAt || "Recently placed"}
@@ -2638,6 +2718,20 @@ function OrderListCard({ order, index, onNavigate }) {
               <strong className="min-w-24 text-white">
                 {money(order.total)}
               </strong>
+              {isPendingPaymentOrder(order) ? (
+                <Tooltip content="Ask PayMongo for the latest payment state" placement="top" showArrow>
+                  <Button
+                    color="warning"
+                    variant="flat"
+                    size="sm"
+                    isDisabled={isCheckingPayment}
+                    onPress={() => onCheckPayment?.(order)}
+                  >
+                    <CreditCard size={14} />
+                    {isCheckingPayment ? "Checking..." : "Check Payment"}
+                  </Button>
+                </Tooltip>
+              ) : null}
               <Tooltip content="View order details" placement="top" showArrow>
                 <Button
                   color="success"

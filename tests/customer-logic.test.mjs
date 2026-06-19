@@ -5,6 +5,7 @@ import {
   canAddCartQuantity,
   isRetryablePaymentReason,
   normalizeCategory,
+  paymentStatusLabel,
   statusLabel,
   toggleFavoriteProduct,
   validateContact,
@@ -59,6 +60,13 @@ test("isRetryablePaymentReason flags asynchronous QRPH states", () => {
   assert.equal(isRetryablePaymentReason("processing"), true);
   assert.equal(isRetryablePaymentReason("still_pending"), true);
   assert.equal(isRetryablePaymentReason("paid"), false);
+});
+
+test("paymentStatusLabel presents webhook payment state for QRPH orders", () => {
+  assert.equal(paymentStatusLabel("paid", "Pending Payment"), "Paid");
+  assert.equal(paymentStatusLabel("pending", "Pending Payment"), "Awaiting QRPH");
+  assert.equal(paymentStatusLabel("processing", "Pending Payment"), "Processing");
+  assert.equal(paymentStatusLabel("", "Order Placed"), "Pending");
 });
 
 test("validateContact requires Philippine mobile format", () => {

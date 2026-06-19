@@ -83,6 +83,16 @@ export function isRetryablePaymentReason(reason) {
   );
 }
 
+export function paymentStatusLabel(paymentStatus, orderStatus = "") {
+  const value = String(paymentStatus || "").toLowerCase();
+  if (value === "paid") return "Paid";
+  if (value === "processing") return "Processing";
+  if (value === "failed") return "Failed";
+  if (value === "cancelled" || value === "canceled") return "Cancelled";
+  if (statusLabel(orderStatus) === "Pending Payment") return "Awaiting QRPH";
+  return "Pending";
+}
+
 export function currentCustomerEmail() {
   return localStorage.getItem("jazjo_user") || "customer@jazjo.com";
 }
