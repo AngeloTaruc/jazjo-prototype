@@ -245,17 +245,6 @@ function httpError(message, status = 400){
   return err;
 }
 
-function normalizeReturnBaseUrl(value){
-  const fallback = APP_BASE_URL;
-  try{
-    const parsed = new URL(String(value || fallback));
-    if(parsed.protocol !== "http:" && parsed.protocol !== "https:") return fallback;
-    return parsed.origin.replace(/\/$/, "");
-  }catch{
-    return fallback;
-  }
-}
-
 function validatePhilippineContact(contact){
   const normalized = String(contact || "").trim();
   if(!/^09\d{9}$/.test(normalized)){
@@ -1503,7 +1492,6 @@ async function createOrder(payload, authProfile){
   const address = String(payload.address || "").trim();
   const paymentMethod = String(payload.paymentMethod || "QRPH").trim();
   const rewardRedemptionId = String(payload.rewardRedemptionId || payload.reward_redemption_id || "").trim();
-  const returnBaseUrl = normalizeReturnBaseUrl(payload.returnBaseUrl || payload.return_base_url || APP_BASE_URL);
   const items = Array.isArray(payload.items) ? payload.items : [];
 
   if(!authProfile?.user_id || !customerName || !contact || !address || !items.length){
@@ -1650,8 +1638,8 @@ async function createOrder(payload, authProfile){
         name: it.name,
         quantity: 1
       })),
-      successUrl: `${returnBaseUrl}/customer-app/?paid=${encodeURIComponent(order.order_code)}#/orders`,
-      cancelUrl: `${returnBaseUrl}/customer-app/?cancelled=${encodeURIComponent(order.order_code)}#/cart`
+      successUrl: `${APP_BASE_URL}/customer-app/?paid=${encodeURIComponent(order.order_code)}#/orders`,
+      cancelUrl: `${APP_BASE_URL}/customer-app/?cancelled=${encodeURIComponent(order.order_code)}#/cart`
     });
     checkoutUrl = checkout?.attributes?.checkout_url || null;
     const checkoutSessionId = checkout?.id || null;
