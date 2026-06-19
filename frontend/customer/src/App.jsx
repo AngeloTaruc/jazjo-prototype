@@ -23,6 +23,8 @@ import {
   BarChart3,
   Clock3,
   CreditCard,
+  Eye,
+  EyeOff,
   Gift,
   Heart,
   Home,
@@ -61,6 +63,7 @@ import {
   apiRepayOrder,
   apiRedeemReward,
   apiRegister,
+  apiRequestRegistrationCode,
   apiRewards,
   apiSaveProfile,
 } from "./lib/api.js";
@@ -84,6 +87,7 @@ import {
   toggleFavoriteProduct,
   validateContact,
   validateDeliveryAddress,
+  validateGmailAddress,
   validatePassword,
   writeStorage,
 } from "./lib/customerLogic.js";
@@ -195,6 +199,7 @@ function Input({
   placeholder = "",
   className = "",
   startContent,
+  endContent,
   ...props
 }) {
   return (
@@ -213,6 +218,11 @@ function Input({
             {startContent}
           </span>
         ) : null}
+        {endContent ? (
+          <span className="absolute right-3 top-1/2 z-10 grid -translate-y-1/2 text-slate-400">
+            {endContent}
+          </span>
+        ) : null}
         <HeroInput
           {...props}
           type={type}
@@ -221,7 +231,7 @@ function Input({
           required={isRequired}
           placeholder={placeholder}
           onChange={(event) => onValueChange?.(event.target.value)}
-          className={`min-h-11 w-full rounded-xl border border-white/10 bg-white/[.06] text-slate-50 outline-none ${startContent ? "pl-11" : ""}`}
+          className={`min-h-11 w-full rounded-xl border border-white/10 bg-white/[.06] text-slate-50 outline-none ${startContent ? "pl-11" : ""} ${endContent ? "pr-11" : ""}`}
         />
       </span>
     </label>
@@ -280,6 +290,7 @@ function DeliveryAddressSelect({
   const selectProvince = (code) => {
     const province = provinces.find((entry) => entry.code === String(code));
     onValueChange?.({
+      ...selected,
       provinceCode: province?.code || "",
       provinceName: province?.name || "",
       cityCode: "",
@@ -305,6 +316,30 @@ function DeliveryAddressSelect({
       <span className="text-sm font-semibold text-slate-300">
         Delivery Address{isRequired ? " *" : ""}
       </span>
+      <Input
+        isRequired={isRequired}
+        label="Full Address"
+        value={selected.fullAddress || ""}
+        onValueChange={(fullAddress) => onValueChange?.({ ...selected, fullAddress })}
+        placeholder="House no., building, unit, or landmark"
+        startContent={<MapPin size={18} />}
+      />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Input
+          isRequired={isRequired}
+          label="Street"
+          value={selected.street || ""}
+          onValueChange={(street) => onValueChange?.({ ...selected, street })}
+          placeholder="Street name"
+        />
+        <Input
+          isRequired={isRequired}
+          label="Barangay"
+          value={selected.barangay || ""}
+          onValueChange={(barangay) => onValueChange?.({ ...selected, barangay })}
+          placeholder="Barangay"
+        />
+      </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <Select
           aria-label="Province"
@@ -2536,6 +2571,7 @@ function ProfilePage({ setMessage }) {
 function LoginPage({ onNavigate, setMessage }) {
   const [form, setForm] = useState({ email: "", password: "" });
   const [authMessage, setAuthMessage] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const login = async (event) => {
     event.preventDefault();
     setAuthMessage("");
@@ -2577,10 +2613,20 @@ function LoginPage({ onNavigate, setMessage }) {
         <Input
           isRequired
           label="Password"
-          type="password"
+          type={showPassword ? "text" : "password"}
           value={form.password}
           onValueChange={(v) => setForm({ ...form, password: v })}
           startContent={<LockKeyhole size={18} />}
+          endContent={
+            <button
+              type="button"
+              className="grid rounded-full p-1 text-slate-400 transition hover:text-slate-100"
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              onClick={() => setShowPassword((value) => !value)}
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          }
         />
         <Button color="success" size="lg" type="submit" className="w-full">
           <LockKeyhole size={18} />
@@ -2605,22 +2651,54 @@ function RegisterPage({ onNavigate, setMessage }) {
     email: "",
     contact: "",
     password: "",
+    confirmPassword: "",
+    verificationCode: "",
     address: {},
   });
   const [authMessage, setAuthMessage] = useState("");
+  const [authMessageStatus, setAuthMessageStatus] = useState("danger");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [sendingCode, setSendingCode] = useState(false);
+  const requestCode = async () => {
+    setAuthMessage("");
+    setAuthMessageStatus("danger");
+    const email = validateGmailAddress(form.email);
+    if (!email.ok) return setAuthMessage(email.message);
+    setSendingCode(true);
+    try {
+      const result = await apiRequestRegistrationCode(email.value);
+      setAuthMessageStatus("success");
+      setAuthMessage(result.devCode
+        ? `Verification code sent. Dev code: ${result.devCode}`
+        : "Verification code sent to your email.");
+    } catch (err) {
+      setAuthMessageStatus("danger");
+      setAuthMessage(err.message);
+    } finally {
+      setSendingCode(false);
+    }
+  };
   const register = async (event) => {
     event.preventDefault();
     setAuthMessage("");
+    setAuthMessageStatus("danger");
     if (!form.firstName.trim() || !form.lastName.trim())
       return setAuthMessage("First name and last name are required.");
+    const email = validateGmailAddress(form.email);
+    if (!email.ok) return setAuthMessage(email.message);
     const contact = validateContact(form.contact);
     if (!contact.ok) return setAuthMessage(contact.message);
     const password = validatePassword(form.password);
     if (!password.ok) return setAuthMessage(password.message);
+    if (form.password !== form.confirmPassword)
+      return setAuthMessage("Confirm password must match password.");
+    if (!String(form.verificationCode || "").trim())
+      return setAuthMessage("Please enter the email verification code.");
     const address = validateDeliveryAddress(form.address);
     if (!address.ok) return setAuthMessage(address.message);
     try {
-      await apiRegister({ ...form, ...address.value });
+      await apiRegister({ ...form, email: email.value, ...address.value });
       setMessage("Account created. Please log in.");
       onNavigate("login");
     } catch (err) {
@@ -2634,6 +2712,7 @@ function RegisterPage({ onNavigate, setMessage }) {
       subtitle="Set up delivery details once and reorder faster next time."
       actionLabel="Already have an account?"
       message={authMessage}
+      messageStatus={authMessageStatus}
       onAction={() => onNavigate("login")}
     >
       <form className="grid gap-4 sm:grid-cols-2" onSubmit={register}>
@@ -2658,6 +2737,7 @@ function RegisterPage({ onNavigate, setMessage }) {
           value={form.email}
           onValueChange={(v) => setForm({ ...form, email: v })}
           className="sm:col-span-2"
+          placeholder="name@gmail.com"
           startContent={<Mail size={18} />}
         />
         <Input
@@ -2671,11 +2751,60 @@ function RegisterPage({ onNavigate, setMessage }) {
         <Input
           isRequired
           label="Password"
-          type="password"
+          type={showPassword ? "text" : "password"}
           value={form.password}
           onValueChange={(v) => setForm({ ...form, password: v })}
           startContent={<LockKeyhole size={18} />}
+          placeholder="8 characters"
+          endContent={
+            <button
+              type="button"
+              className="grid rounded-full p-1 text-slate-400 transition hover:text-slate-100"
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              onClick={() => setShowPassword((value) => !value)}
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          }
         />
+        <Input
+          isRequired
+          label="Confirm Password"
+          type={showConfirmPassword ? "text" : "password"}
+          value={form.confirmPassword}
+          onValueChange={(v) => setForm({ ...form, confirmPassword: v })}
+          startContent={<LockKeyhole size={18} />}
+          className="sm:col-span-2"
+          endContent={
+            <button
+              type="button"
+              className="grid rounded-full p-1 text-slate-400 transition hover:text-slate-100"
+              aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+              onClick={() => setShowConfirmPassword((value) => !value)}
+            >
+              {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          }
+        />
+        <div className="grid gap-3 sm:col-span-2 sm:grid-cols-[1fr_auto] sm:items-end">
+          <Input
+            isRequired
+            label="Verification Code"
+            value={form.verificationCode}
+            onValueChange={(v) => setForm({ ...form, verificationCode: v })}
+            placeholder="6-digit code"
+            startContent={<ShieldCheck size={18} />}
+          />
+          <Button
+            type="button"
+            variant="flat"
+            isLoading={sendingCode}
+            onPress={requestCode}
+            className="min-h-11"
+          >
+            Send Code
+          </Button>
+        </div>
         <DeliveryAddressSelect
           isRequired
           value={form.address}
@@ -2703,6 +2832,7 @@ function AuthCard({
   subtitle,
   actionLabel,
   message,
+  messageStatus = "danger",
   onAction,
   children,
 }) {
@@ -2762,9 +2892,11 @@ function AuthCard({
         </CardHeader>
         <CardBody className="gap-4 p-6 pt-2">
           {message ? (
-            <Alert status="danger">
+            <Alert status={messageStatus}>
               <Alert.Content>
-                <Alert.Title>Unable to continue</Alert.Title>
+                <Alert.Title>
+                  {messageStatus === "success" ? "Verification code sent" : "Unable to continue"}
+                </Alert.Title>
                 <Alert.Description>{message}</Alert.Description>
               </Alert.Content>
             </Alert>

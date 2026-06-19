@@ -40,6 +40,10 @@ const SUPABASE_ANON_KEY = env("SUPABASE_ANON_KEY");
 const SUPABASE_SERVICE_ROLE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const PAYMONGO_SECRET_KEY = env("PAYMONGO_SECRET_KEY");
 const PAYMONGO_WEBHOOK_SECRET = env("PAYMONGO_WEBHOOK_SECRET");
+const EMAILJS_SERVICE_ID = env("EMAILJS_SERVICE_ID");
+const EMAILJS_TEMPLATE_ID = env("EMAILJS_TEMPLATE_ID");
+const EMAILJS_PUBLIC_KEY = env("EMAILJS_PUBLIC_KEY");
+const EMAILJS_PRIVATE_KEY = env("EMAILJS_PRIVATE_KEY");
 const APP_BASE_URL = (env("APP_BASE_URL") || `http://localhost:${PORT}`).replace(/\/$/, "");
 
 const MIME = {
@@ -76,6 +80,7 @@ const PRODUCT_IMAGE_ALLOWED_TYPES = new Map([
 const PSGC_API_BASE = "https://psgc.gitlab.io/api";
 const CUSTOMER_PENDING_ORDER_TTL_MS = 24 * 60 * 60 * 1000;
 const locationCache = new Map();
+const registrationVerificationCodes = new Map();
 
 function sendJson(res, status, body){
   res.writeHead(status, {
@@ -272,6 +277,86 @@ function validatePhilippineContact(contact){
   return normalized;
 }
 
+function validateGmailEmail(email){
+  const normalized = String(email || "").trim().toLowerCase();
+  if(!normalized){
+    throw httpError("email is required.");
+  }
+  if(!normalized.endsWith("@gmail.com")){
+    throw httpError("Email must end with @gmail.com.");
+  }
+  return normalized;
+}
+
+function buildEmailJsVerificationPayload({ email, code, serviceId, templateId, publicKey, privateKey }){
+  return {
+    service_id: serviceId,
+    template_id: templateId,
+    user_id: publicKey,
+    ...(privateKey ? { accessToken: privateKey } : {}),
+    template_params: {
+      to_email: email,
+      verification_code: code
+    }
+  };
+}
+
+async function sendRegistrationVerificationEmail(email, code){
+  const configured = EMAILJS_SERVICE_ID && EMAILJS_TEMPLATE_ID && EMAILJS_PUBLIC_KEY;
+  if(!configured) return false;
+
+  const response = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildEmailJsVerificationPayload({
+      email,
+      code,
+      serviceId: EMAILJS_SERVICE_ID,
+      templateId: EMAILJS_TEMPLATE_ID,
+      publicKey: EMAILJS_PUBLIC_KEY,
+      privateKey: EMAILJS_PRIVATE_KEY
+    }))
+  });
+  if(!response.ok){
+    const message = (await response.text()).trim();
+    throw httpError(message || "Unable to send the verification email.", 502);
+  }
+  return true;
+}
+
+async function createRegistrationVerificationCode(payload){
+  const email = validateGmailEmail(payload?.email);
+  const code = String(crypto.randomInt(100000, 1000000));
+  const emailSent = await sendRegistrationVerificationEmail(email, code);
+  registrationVerificationCodes.set(email, {
+    code,
+    expiresAt: Date.now() + 10 * 60 * 1000
+  });
+  if(!emailSent){
+    console.log(`[auth] Verification code for ${email}: ${code}`);
+  }
+  return {
+    ok: true,
+    message: emailSent ? "Verification code sent to your email." : "Verification code generated for local development.",
+    ...(!emailSent ? { devCode: code } : {})
+  };
+}
+
+function verifyRegistrationCode(email, code){
+  const normalizedEmail = validateGmailEmail(email);
+  const normalizedCode = String(code || "").trim();
+  const saved = registrationVerificationCodes.get(normalizedEmail);
+  if(!saved || saved.expiresAt <= Date.now()){
+    registrationVerificationCodes.delete(normalizedEmail);
+    throw httpError("Verification code is missing or expired.");
+  }
+  if(saved.code !== normalizedCode){
+    throw httpError("Verification code is incorrect.");
+  }
+  registrationVerificationCodes.delete(normalizedEmail);
+  return true;
+}
+
 function normalizePsgcLocation(entry){
   return {
     code: String(entry?.code || "").trim(),
@@ -349,32 +434,54 @@ async function listPsgcProvinceCities(provinceCode){
 }
 
 async function validateDeliveryAddress(payload){
+  const fullAddress = String(payload?.fullAddress || payload?.full_address || "").trim().replace(/\s+/g, " ");
+  const street = String(payload?.street || "").trim().replace(/\s+/g, " ");
+  const barangay = String(payload?.barangay || payload?.baranggay || "").trim().replace(/^barangay\s+/i, "").replace(/\s+/g, " ");
   const provinceCode = String(payload?.provinceCode || payload?.province_code || "").trim();
+  const provinceName = String(payload?.provinceName || payload?.province_name || "").trim();
   const cityCode = String(payload?.cityCode || payload?.city_code || "").trim();
+  const cityName = String(payload?.cityName || payload?.city_name || "").trim();
+  if(!fullAddress) throw httpError("Please enter the full delivery address.");
+  if(!street) throw httpError("Please enter the street.");
+  if(!barangay) throw httpError("Please enter the barangay.");
   if(!provinceCode) throw httpError("Please choose a province.");
   if(!cityCode) throw httpError("Please choose a city or municipality.");
 
-  const [province, cities] = await Promise.all([
-    getPsgcProvince(provinceCode),
-    listPsgcProvinceCities(provinceCode)
-  ]);
-  const city = cities.find((entry) => entry.code === cityCode);
-  if(!city){
+  let province = { code: provinceCode, name: provinceName };
+  let city = { code: cityCode, name: cityName };
+  try{
+    const [verifiedProvince, cities] = await Promise.all([
+      getPsgcProvince(provinceCode),
+      listPsgcProvinceCities(provinceCode)
+    ]);
+    const verifiedCity = cities.find((entry) => entry.code === cityCode);
+    if(verifiedProvince) province = verifiedProvince;
+    if(verifiedCity) city = verifiedCity;
+  }catch(err){
+    console.warn(`[locations] PSGC validation fallback: ${err.message}`);
+  }
+  if(!province.name){
+    throw httpError("Please choose a valid province.");
+  }
+  if(!city.name){
     throw httpError("Please choose a valid city or municipality for the selected province.");
   }
   return {
+    fullAddress,
+    street,
+    barangay,
     provinceCode: province.code,
     provinceName: province.name,
     cityCode: city.code,
     cityName: city.name,
-    address: `${city.name}, ${province.name}`
+    address: [fullAddress, street, `Barangay ${barangay}`, city.name, province.name].join(", ")
   };
 }
 
 function validatePasswordComplexity(password){
   const value = String(password || "");
-  if(value.length < 8){
-    throw httpError("Password must be at least 8 characters.");
+  if(value.length !== 8){
+    throw httpError("Password must be exactly 8 characters.");
   }
   if(!/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9]/.test(value)){
     throw httpError("Password must include uppercase, lowercase, number, and special character.");
@@ -386,7 +493,7 @@ function validateCustomerRegistration(payload){
   const firstName = String(payload.firstName || payload.first_name || "").trim().replace(/\s+/g, " ");
   const lastName = String(payload.lastName || payload.last_name || "").trim().replace(/\s+/g, " ");
   const fallbackFullName = String(payload.fullName || payload.full_name || "").trim().replace(/\s+/g, " ");
-  const email = String(payload.email || "").trim().toLowerCase();
+  const email = validateGmailEmail(payload.email);
   const password = validatePasswordComplexity(payload.password);
   const contact = validatePhilippineContact(payload.contact);
 
@@ -395,10 +502,6 @@ function validateCustomerRegistration(payload){
       throw httpError("First name and last name are required.");
     }
   }
-  if(!email){
-    throw httpError("email is required.");
-  }
-
   const fullName = firstName && lastName ? `${firstName} ${lastName}` : fallbackFullName;
   return { firstName, lastName, fullName, email, contact, password };
 }
@@ -1423,6 +1526,7 @@ async function upsertCustomerProfile({ userId, email, fullName, contact, address
 
 async function registerCustomerAccount(payload){
   const { email, password, fullName, contact } = validateCustomerRegistration(payload);
+  verifyRegistrationCode(email, payload?.verificationCode || payload?.verification_code);
   const deliveryAddress = await validateDeliveryAddress(payload);
 
   const existing = await getProfileByEmail(email);
@@ -2291,6 +2395,13 @@ async function handleApi(req, res, url){
     return true;
   }
 
+  if(req.method === "POST" && url.pathname === "/api/auth/register/verification-code"){
+    const payload = await readJson(req);
+    const result = await createRegistrationVerificationCode(payload);
+    sendJson(res, 200, result);
+    return true;
+  }
+
   if(req.method === "POST" && url.pathname === "/api/auth/register"){
     const payload = await readJson(req);
     const result = await registerCustomerAccount(payload);
@@ -2607,6 +2718,7 @@ if(!process.env.VERCEL){
 
 export {
   PRODUCT_IMAGE_MAX_BYTES,
+  buildEmailJsVerificationPayload,
   handleRequest,
   isPaymongoProcessingStatusError,
   normalizeReturnBaseUrl,

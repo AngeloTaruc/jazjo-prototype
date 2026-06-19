@@ -32,24 +32,58 @@ export function validateContact(contact) {
   return { ok: true, value };
 }
 
+export function validateGmailAddress(email) {
+  const value = String(email || "").trim().toLowerCase();
+  if (!value) return { ok: false, message: "Email is required." };
+  if (!value.endsWith("@gmail.com")) {
+    return { ok: false, message: "Email must end with @gmail.com." };
+  }
+  return { ok: true, value };
+}
+
 export function validatePassword(password) {
   const value = String(password || "");
-  if (value.length < 8) return { ok: false, message: "Password must be at least 8 characters." };
+  if (value.length !== 8) return { ok: false, message: "Password must be exactly 8 characters." };
   if (!/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9]/.test(value)) {
     return { ok: false, message: "Password must include uppercase, lowercase, number, and special character." };
   }
   return { ok: true, value };
 }
 
-export function formatDeliveryAddress({ provinceName = "", cityName = "" } = {}) {
-  return [cityName, provinceName].map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+export function formatDeliveryAddress({
+  fullAddress = "",
+  street = "",
+  barangay = "",
+  provinceName = "",
+  cityName = ""
+} = {}) {
+  const cleanBarangay = String(barangay || "").trim().replace(/^barangay\s+/i, "");
+  return [
+    fullAddress,
+    street,
+    cleanBarangay ? `Barangay ${cleanBarangay}` : "",
+    cityName,
+    provinceName
+  ].map((item) => String(item || "").trim()).filter(Boolean).join(", ");
 }
 
 export function validateDeliveryAddress(address = {}) {
+  const fullAddress = String(address.fullAddress || address.full_address || "").trim();
+  const street = String(address.street || "").trim();
+  const barangay = String(address.barangay || address.baranggay || "").trim();
   const provinceCode = String(address.provinceCode || "").trim();
   const provinceName = String(address.provinceName || "").trim();
   const cityCode = String(address.cityCode || "").trim();
   const cityName = String(address.cityName || "").trim();
+  if (!fullAddress) {
+    return { ok: false, message: "Please enter the full delivery address." };
+  }
+  if (!street) {
+    return { ok: false, message: "Please enter the street." };
+  }
+  if (!barangay) {
+    return { ok: false, message: "Please enter the barangay." };
+  }
   if (!provinceCode || !provinceName) {
     return { ok: false, message: "Please choose a province." };
   }
@@ -59,11 +93,14 @@ export function validateDeliveryAddress(address = {}) {
   return {
     ok: true,
     value: {
+      fullAddress,
+      street,
+      barangay,
       provinceCode,
       provinceName,
       cityCode,
       cityName,
-      address: formatDeliveryAddress({ provinceName, cityName })
+      address: formatDeliveryAddress({ fullAddress, street, barangay, provinceName, cityName })
     }
   };
 }

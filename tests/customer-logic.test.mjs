@@ -96,17 +96,21 @@ test("validateContact requires Philippine mobile format", () => {
 
 test("validateDeliveryAddress requires province and city selections", () => {
   const result = validateDeliveryAddress({
+    fullAddress: "Unit 12, Jazjo Building",
+    street: "Road 11",
+    barangay: "West Crame",
     provinceCode: "012800000",
     provinceName: "Ilocos Norte",
     cityCode: "012805000",
     cityName: "Laoag City"
   });
   assert.equal(result.ok, true);
-  assert.equal(result.value.address, "Laoag City, Ilocos Norte");
+  assert.equal(result.value.address, "Unit 12, Jazjo Building, Road 11, Barangay West Crame, Laoag City, Ilocos Norte");
   assert.equal(validateDeliveryAddress({ provinceCode: "012800000", provinceName: "Ilocos Norte" }).ok, false);
 });
 
-test("validatePassword requires complexity", () => {
-  assert.equal(validatePassword("StrongPass1!").ok, true);
+test("validatePassword requires exactly 8 complex characters", () => {
+  assert.equal(validatePassword("Aa12345!").ok, true);
+  assert.equal(validatePassword("StrongPass1!").ok, false);
   assert.equal(validatePassword("password123").ok, false);
 });

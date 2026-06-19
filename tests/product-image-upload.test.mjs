@@ -46,10 +46,10 @@ test("validateCustomerRegistration requires first and last name", () => {
     () => server.validateCustomerRegistration({
       firstName: "Juan",
       lastName: "",
-      email: "juan@example.com",
+      email: "juan@gmail.com",
       contact: "09123456789",
       address: "San Juan City",
-      password: "StrongPass1!"
+      password: "Aa12345!"
     }),
     /First name and last name are required/
   );
@@ -59,15 +59,29 @@ test("validateCustomerRegistration accepts valid Philippine contact and strong p
   const result = server.validateCustomerRegistration({
     firstName: "Juan",
     lastName: "Dela Cruz",
-    email: "JUAN@example.com",
+    email: "JUAN@gmail.com",
     contact: "09123456789",
     address: "San Juan City",
-    password: "StrongPass1!"
+    password: "Aa12345!"
   });
 
-  assert.equal(result.email, "juan@example.com");
+  assert.equal(result.email, "juan@gmail.com");
   assert.equal(result.fullName, "Juan Dela Cruz");
   assert.equal(result.contact, "09123456789");
+});
+
+test("validateCustomerRegistration requires Gmail addresses", () => {
+  assert.throws(
+    () => server.validateCustomerRegistration({
+      firstName: "Juan",
+      lastName: "Dela Cruz",
+      email: "juan@example.com",
+      contact: "09123456789",
+      address: "San Juan City",
+      password: "Aa12345!"
+    }),
+    /Email must end with @gmail.com/
+  );
 });
 
 test("validateCustomerRegistration rejects invalid Philippine contact", () => {
@@ -75,20 +89,47 @@ test("validateCustomerRegistration rejects invalid Philippine contact", () => {
     () => server.validateCustomerRegistration({
       firstName: "Juan",
       lastName: "Dela Cruz",
-      email: "juan@example.com",
+      email: "juan@gmail.com",
       contact: "+639123456789",
       address: "San Juan City",
-      password: "StrongPass1!"
+      password: "Aa12345!"
     }),
     /Contact number must use Philippine format/
   );
 });
 
 test("validatePasswordComplexity requires mixed character classes", () => {
+  assert.equal(server.validatePasswordComplexity("Aa12345!"), "Aa12345!");
+  assert.throws(
+    () => server.validatePasswordComplexity("StrongPass1!"),
+    /Password must be exactly 8 characters/
+  );
   assert.throws(
     () => server.validatePasswordComplexity("password123"),
-    /Password must include uppercase, lowercase, number, and special character/
+    /Password must be exactly 8 characters/
   );
+});
+
+test("buildEmailJsVerificationPayload matches the verification template variables", () => {
+  const payload = server.buildEmailJsVerificationPayload({
+    email: "juan@gmail.com",
+    code: "123456",
+    serviceId: "service_test",
+    templateId: "template_test",
+    publicKey: "public_test",
+    privateKey: "private_test"
+  });
+
+  assert.deepEqual(payload, {
+    service_id: "service_test",
+    template_id: "template_test",
+    user_id: "public_test",
+    accessToken: "private_test",
+    template_params: {
+      to_email: "juan@gmail.com",
+      verification_code: "123456"
+    }
+  });
 });
 
 test("normalizeReturnBaseUrl accepts only http origins", () => {

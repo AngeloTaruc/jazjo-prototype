@@ -71,6 +71,13 @@ export async function apiRegister(payload) {
   });
 }
 
+export async function apiRequestRegistrationCode(email) {
+  return request("/api/auth/register/verification-code", {
+    method: "POST",
+    body: JSON.stringify({ email })
+  });
+}
+
 export async function apiProducts() {
   const data = await request("/api/products");
   return (data.products || []).map((p) => ({
