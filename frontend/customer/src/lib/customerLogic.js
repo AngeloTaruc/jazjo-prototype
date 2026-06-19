@@ -93,6 +93,24 @@ export function paymentStatusLabel(paymentStatus, orderStatus = "") {
   return "Pending";
 }
 
+export function canAccessPanelRoute(route, role) {
+  const value = String(route || "");
+  const normalizedRole = String(role || "").toLowerCase();
+  if (value.startsWith("admin/")) return normalizedRole === "admin";
+  if (value.startsWith("staff/")) return normalizedRole === "staff" || normalizedRole === "admin";
+  return true;
+}
+
+export function canRepayOrder(order) {
+  const paymentStatus = String(order?.paymentStatus || order?.payment_status || "").toLowerCase();
+  const paymentMethod = String(order?.paymentMethod || order?.payment_method || "").toUpperCase();
+  return (
+    statusLabel(order?.status) === "Pending Payment" &&
+    paymentStatus !== "paid" &&
+    paymentMethod.includes("QRPH")
+  );
+}
+
 export function currentCustomerEmail() {
   return localStorage.getItem("jazjo_user") || "customer@jazjo.com";
 }

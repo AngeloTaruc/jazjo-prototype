@@ -42,8 +42,10 @@ import {
   apiAdminSales,
   apiAdminReports,
   apiAdminDelivery,
+  apiAdminDeleteOrder,
   apiAdminCategories,
   apiAdminCreateCategory,
+  apiAdminDeleteCategory,
   apiAdminCreateProduct,
   apiAdminUploadProductImage,
   apiAdminRestock,
@@ -381,6 +383,8 @@ function AdminOrdersPage({ setMessage }) {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("All");
   const [page, setPage] = useState(1);
+  const [deletingOrder, setDeletingOrder] = useState("");
+  const [selectedOrder, setSelectedOrder] = useState(null);
   const perPage = 10;
   const statuses = ["All", "Pending Payment", "Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered", "Cancelled"];
   const load = useCallback(async () => {
@@ -410,6 +414,19 @@ function AdminOrdersPage({ setMessage }) {
       load();
     } catch (err) {
       setMessage(`Error: ${err.message}`);
+    }
+  };
+  const removeOrder = async (orderCode) => {
+    if (!window.confirm(`Remove order ${orderCode}? This cannot be undone.`)) return;
+    setDeletingOrder(orderCode);
+    try {
+      await apiAdminDeleteOrder(orderCode);
+      setMessage(`Order ${orderCode} removed.`);
+      load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setDeletingOrder("");
     }
   };
   const nextStatus = (current) => {
@@ -471,8 +488,20 @@ function AdminOrdersPage({ setMessage }) {
                             </Button>
                           ) : null}
                           <Tooltip content="View order details" placement="top" showArrow>
-                            <Button size="sm" variant="light" isIconOnly onPress={() => go(`order/${order.id}`)}>
+                            <Button size="sm" variant="light" isIconOnly onPress={() => setSelectedOrder(order)}>
                               <Eye size={14} />
+                            </Button>
+                          </Tooltip>
+                          <Tooltip content="Remove order" placement="top" showArrow>
+                            <Button
+                              size="sm"
+                              color="danger"
+                              variant="light"
+                              isIconOnly
+                              isDisabled={deletingOrder === order.id}
+                              onPress={() => removeOrder(order.id)}
+                            >
+                              <Trash2 size={14} />
                             </Button>
                           </Tooltip>
                         </div>
@@ -490,6 +519,74 @@ function AdminOrdersPage({ setMessage }) {
           ) : null}
         </>
       )}
+      <Modal isOpen={!!selectedOrder} onOpenChange={() => setSelectedOrder(null)}>
+        <Modal.Backdrop>
+          <Modal.Container size="2xl">
+            <Modal.Dialog>
+              <Modal.Header>
+                <div>
+                  <p className="text-xs font-bold uppercase text-emerald-300">Order Details</p>
+                  <h2 className="text-lg font-black text-white">{selectedOrder?.id}</h2>
+                </div>
+              </Modal.Header>
+              <Modal.Body className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                    <p className="text-xs font-bold uppercase text-slate-500">Customer</p>
+                    <p className="mt-1 font-semibold text-white">{selectedOrder?.customerName || "Customer"}</p>
+                    <p className="text-sm text-slate-400">{selectedOrder?.contact || "No contact"}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                    <p className="text-xs font-bold uppercase text-slate-500">Payment</p>
+                    <p className="mt-1 font-semibold text-white">{selectedOrder?.paymentMethod || "QRPH"}</p>
+                    <p className="text-sm text-slate-400">{selectedOrder?.paymentStatus || "pending"}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                    <p className="text-xs font-bold uppercase text-slate-500">Date</p>
+                    <p className="mt-1 text-sm font-semibold text-white">{selectedOrder?.createdAt || "-"}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                    <p className="text-xs font-bold uppercase text-slate-500">Status</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Chip color={statusLabel(selectedOrder?.status) === "Delivered" ? "success" : statusLabel(selectedOrder?.status) === "Cancelled" ? "danger" : "warning"} variant="flat" size="sm">
+                        {statusLabel(selectedOrder?.status)}
+                      </Chip>
+                      {selectedOrder?.paymentStatus === "paid" || selectedOrder?.payment_status === "paid" ? <Chip color="success" size="sm" variant="flat">Paid</Chip> : null}
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                  <p className="text-xs font-bold uppercase text-slate-500">Delivery Address</p>
+                  <p className="mt-1 text-sm text-slate-200">{selectedOrder?.address || "No address"}</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="text-xs font-bold uppercase text-slate-500">Items</p>
+                    <strong className="text-white">{money(selectedOrder?.total || 0)}</strong>
+                  </div>
+                  <div className="grid gap-2">
+                    {(selectedOrder?.items || []).map((item, idx) => (
+                      <div key={`${item.productId || item.name}-${idx}`} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-950/50 p-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-white">{item.name}</p>
+                          <p className="text-xs text-slate-500">{formatQty(item.qty)} case(s)</p>
+                        </div>
+                        <p className="shrink-0 text-sm font-semibold text-white">{money(Number(item.price || 0) * Number(item.qty || 0))}</p>
+                      </div>
+                    ))}
+                    {!(selectedOrder?.items || []).length ? (
+                      <p className="text-sm text-slate-400">No order items found.</p>
+                    ) : null}
+                  </div>
+                </div>
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => setSelectedOrder(null)}>Close</Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </motion.div>
   );
 }
@@ -502,6 +599,7 @@ function AdminInventoryPage({ setMessage }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [addCategoryName, setAddCategoryName] = useState("");
+  const [deletingCategory, setDeletingCategory] = useState("");
   const [showRestock, setShowRestock] = useState(false);
   const [newProduct, setNewProduct] = useState({ name: "", category: "", unit: "case", price: "", stockCases: "" });
   const [productImagePreview, setProductImagePreview] = useState("");
@@ -545,6 +643,24 @@ function AdminInventoryPage({ setMessage }) {
       setMessage(`Category "${addCategoryName.trim()}" added.`);
     } catch (err) {
       setMessage(`Error: ${err.message}`);
+    }
+  };
+  const removeCategory = async (name) => {
+    if (!window.confirm(`Remove category "${name}"? Products in this category will become uncategorized.`)) return;
+    setDeletingCategory(name);
+    try {
+      const result = await apiAdminDeleteCategory(name);
+      setCategories(result.categories || []);
+      setMessage(`Category "${name}" removed.`);
+      load();
+    } catch (err) {
+      if (/404|not found/i.test(err.message || "")) {
+        setMessage("Error: category remove route not found. Restart the Node server to load the latest backend code.");
+        return;
+      }
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setDeletingCategory("");
     }
   };
   const handleImageSelect = (e) => {
@@ -654,8 +770,24 @@ function AdminInventoryPage({ setMessage }) {
               <Button size="sm" color="success" isIconOnly onPress={addCategory}><Plus size={14} /></Button>
             </div>
             {categories.length > 0 ? (
-              <div className="flex flex-wrap gap-1">
-                {categories.map((cat) => <Chip key={cat} size="sm" variant="flat">{cat}</Chip>)}
+              <div className="flex flex-wrap gap-1.5">
+                {categories.map((cat) => (
+                  <span
+                    key={cat}
+                    className="inline-flex min-h-6 items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-xs font-semibold text-slate-100"
+                  >
+                    <span>{cat}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${cat}`}
+                      className="grid h-4 w-4 place-items-center rounded-full text-slate-400 transition hover:bg-red-500/20 hover:text-red-300 disabled:opacity-40"
+                      disabled={deletingCategory === cat}
+                      onClick={() => removeCategory(cat)}
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  </span>
+                ))}
               </div>
             ) : null}
           </CardBody>

@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   canAddCartQuantity,
+  canAccessPanelRoute,
+  canRepayOrder,
   isRetryablePaymentReason,
   normalizeCategory,
   paymentStatusLabel,
@@ -67,6 +69,21 @@ test("paymentStatusLabel presents webhook payment state for QRPH orders", () => 
   assert.equal(paymentStatusLabel("pending", "Pending Payment"), "Awaiting QRPH");
   assert.equal(paymentStatusLabel("processing", "Pending Payment"), "Processing");
   assert.equal(paymentStatusLabel("", "Order Placed"), "Pending");
+});
+
+test("canAccessPanelRoute allows only matching admin and staff roles", () => {
+  assert.equal(canAccessPanelRoute("admin/orders", "admin"), true);
+  assert.equal(canAccessPanelRoute("admin/orders", "customer"), false);
+  assert.equal(canAccessPanelRoute("staff/orders", "staff"), true);
+  assert.equal(canAccessPanelRoute("staff/orders", "admin"), true);
+  assert.equal(canAccessPanelRoute("orders", "customer"), true);
+});
+
+test("canRepayOrder only allows pending unpaid QRPH orders", () => {
+  assert.equal(canRepayOrder({ status: "Pending Payment", paymentStatus: "pending", paymentMethod: "QRPH" }), true);
+  assert.equal(canRepayOrder({ status: "Pending Payment", paymentStatus: "paid", paymentMethod: "QRPH" }), false);
+  assert.equal(canRepayOrder({ status: "Order Placed", paymentStatus: "pending", paymentMethod: "QRPH" }), false);
+  assert.equal(canRepayOrder({ status: "Pending Payment", paymentStatus: "pending", paymentMethod: "Cash" }), false);
 });
 
 test("validateContact requires Philippine mobile format", () => {

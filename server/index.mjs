@@ -460,6 +460,28 @@ async function addAdminCategory(name){
   return await listAdminCategories();
 }
 
+async function deleteAdminCategory(name){
+  const normalized = normalizeCategoryName(name);
+  if(!normalized){
+    throw new Error("Category name is required.");
+  }
+  const existing = await getCategoryByName(normalized);
+  if(!existing){
+    return await listAdminCategories();
+  }
+  await supabaseRequest(`/rest/v1/products?category_id=eq.${encodeURIComponent(existing.id)}`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=minimal" },
+    body: { category_id: null }
+  });
+  await supabaseRequest(`/rest/v1/categories?id=eq.${encodeURIComponent(existing.id)}`, {
+    method: "DELETE",
+    serviceRole: true
+  });
+  return await listAdminCategories();
+}
+
 async function getProductBySkuRaw(sku){
   const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,image_url,is_active";
   const encodedSku = encodeURIComponent(sku);
@@ -1739,6 +1761,127 @@ async function updateOrderStatus(orderCode, nextStatusInput, actorProfile){
   return updated;
 }
 
+async function repayOrder(orderCode, authProfile, payload = {}){
+  const rows = await supabaseRequest(
+    `/rest/v1/orders?select=id,order_code,user_id,total,status,payment_status,payment_method&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`,
+    { serviceRole: true }
+  );
+  const order = rows?.[0];
+  if(!order){
+    const err = new Error("Order not found.");
+    err.status = 404;
+    throw err;
+  }
+  if(authProfile?.role === "customer" && order.user_id !== authProfile.user_id){
+    const err = new Error("Forbidden");
+    err.status = 403;
+    throw err;
+  }
+  if(String(order.payment_status || "").toLowerCase() === "paid"){
+    const err = new Error("This order is already paid.");
+    err.status = 409;
+    throw err;
+  }
+  if(toUiStatus(order.status) !== "Pending Payment" || !isQrphMethod(order.payment_method)){
+    const err = new Error("Only pending QRPH orders can be paid again.");
+    err.status = 409;
+    throw err;
+  }
+  const total = Number(order.total || 0);
+  if(!Number.isFinite(total) || total <= 0){
+    throw new Error("Order total must be greater than zero.");
+  }
+
+  const returnBaseUrl = normalizeReturnBaseUrl(payload.returnBaseUrl || payload.return_base_url || APP_BASE_URL);
+  const checkout = await paymongoCreateCheckoutSession({
+    orderCode: order.order_code,
+    lineItems: [{
+      currency: "PHP",
+      amount: toCentavos(total),
+      name: `Order ${order.order_code}`,
+      quantity: 1
+    }],
+    successUrl: `${returnBaseUrl}/customer-app/?paid=${encodeURIComponent(order.order_code)}#/orders`,
+    cancelUrl: `${returnBaseUrl}/customer-app/?cancelled=${encodeURIComponent(order.order_code)}#/orders`
+  });
+  const checkoutUrl = checkout?.attributes?.checkout_url || null;
+  const checkoutSessionId = checkout?.id || null;
+  if(!checkoutUrl || !checkoutSessionId){
+    throw new Error("PayMongo did not return a checkout URL.");
+  }
+
+  await supabaseRequest(`/rest/v1/orders?id=eq.${order.id}`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=minimal" },
+    body: {
+      payment_status: "pending",
+      status: "pending_payment",
+      paymongo_checkout_session_id: checkoutSessionId
+    }
+  });
+  await supabaseRequest(`/rest/v1/payments?order_id=eq.${order.id}`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=minimal" },
+    body: {
+      status: "pending",
+      provider: "paymongo",
+      amount: total,
+      currency: "PHP",
+      provider_checkout_session_id: checkoutSessionId
+    }
+  });
+  await supabaseRequest("/rest/v1/order_status_events", {
+    method: "POST",
+    serviceRole: true,
+    headers: { Prefer: "return=minimal" },
+    body: [{
+      order_id: order.id,
+      status: "pending_payment",
+      note: "QRPH repayment checkout created."
+    }]
+  });
+
+  return { ok: true, checkoutUrl, checkoutSessionId };
+}
+
+async function deleteOrderByCode(orderCode){
+  const rows = await supabaseRequest(`/rest/v1/orders?select=id,order_code&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`, {
+    serviceRole: true
+  });
+  const order = rows?.[0];
+  if(!order){
+    return { deleted: false, reason: "not_found" };
+  }
+
+  await supabaseRequest(`/rest/v1/reward_redemptions?order_id=eq.${order.id}`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=minimal" },
+    body: { order_id: null }
+  }).catch((err) => {
+    if(!isMissingRelationError(err, "reward_redemptions")) throw err;
+  });
+  await supabaseRequest(`/rest/v1/payments?order_id=eq.${order.id}`, {
+    method: "DELETE",
+    serviceRole: true
+  });
+  await supabaseRequest(`/rest/v1/order_status_events?order_id=eq.${order.id}`, {
+    method: "DELETE",
+    serviceRole: true
+  });
+  await supabaseRequest(`/rest/v1/order_items?order_id=eq.${order.id}`, {
+    method: "DELETE",
+    serviceRole: true
+  });
+  await supabaseRequest(`/rest/v1/orders?id=eq.${order.id}`, {
+    method: "DELETE",
+    serviceRole: true
+  });
+  return { deleted: true };
+}
+
 async function findOrderByCode(orderCode){
   const rows = await supabaseRequest(`/rest/v1/orders?select=id,order_code,user_id,status,payment_status,paymongo_checkout_session_id&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`, {
     serviceRole: true
@@ -2114,6 +2257,15 @@ async function handleApi(req, res, url){
     return true;
   }
 
+  if(req.method === "POST" && url.pathname.startsWith("/api/orders/") && url.pathname.endsWith("/repay")){
+    const auth = await requireAuth(req, ["customer", "admin", "staff"]);
+    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace("/repay", ""));
+    const payload = await readJson(req);
+    const result = await repayOrder(orderCode, auth.profile, payload);
+    sendJson(res, 200, result);
+    return true;
+  }
+
   if(req.method === "POST" && url.pathname === "/api/orders"){
     const auth = await requireAuth(req, ["customer", "admin", "staff"]);
     const payload = await readJson(req);
@@ -2140,6 +2292,13 @@ async function handleApi(req, res, url){
   if(req.method === "GET" && url.pathname === "/api/panel/admin/orders"){
     await requireAuth(req, ["admin"]);
     sendJson(res, 200, { orders: await listAllOrdersDetailed() });
+    return true;
+  }
+  if(req.method === "DELETE" && url.pathname.startsWith("/api/panel/admin/orders/")){
+    await requireAuth(req, ["admin"]);
+    const orderCode = decodeURIComponent(url.pathname.replace("/api/panel/admin/orders/", ""));
+    const result = await deleteOrderByCode(orderCode);
+    sendJson(res, 200, { ok: true, ...result });
     return true;
   }
   if(req.method === "GET" && url.pathname === "/api/panel/admin/inventory"){
@@ -2193,6 +2352,13 @@ async function handleApi(req, res, url){
     const payload = await readJson(req);
     const categories = await addAdminCategory(payload.name);
     sendJson(res, 201, { ok: true, categories });
+    return true;
+  }
+  if(req.method === "DELETE" && url.pathname.startsWith("/api/panel/admin/categories/")){
+    await requireAuth(req, ["admin"]);
+    const name = decodeURIComponent(url.pathname.replace("/api/panel/admin/categories/", ""));
+    const categories = await deleteAdminCategory(name);
+    sendJson(res, 200, { ok: true, categories });
     return true;
   }
   if(req.method === "GET" && url.pathname === "/api/panel/admin/customers"){

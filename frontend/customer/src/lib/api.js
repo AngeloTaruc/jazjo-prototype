@@ -103,6 +103,13 @@ export async function apiReconcilePayment(orderCode) {
   return request(`/api/orders/${encodeURIComponent(orderCode)}/reconcile-payment`, { method: "POST" });
 }
 
+export async function apiRepayOrder(orderCode) {
+  return request(`/api/orders/${encodeURIComponent(orderCode)}/repay`, {
+    method: "POST",
+    body: JSON.stringify({ returnBaseUrl: window.location.origin })
+  });
+}
+
 export async function apiRewards() {
   const data = await request("/api/rewards");
   const summary = data.rewards || {};
@@ -133,6 +140,12 @@ export async function apiAdminOrders() {
   return request("/api/panel/admin/orders");
 }
 
+export async function apiAdminDeleteOrder(orderCode) {
+  return request(`/api/panel/admin/orders/${encodeURIComponent(orderCode)}`, {
+    method: "DELETE"
+  });
+}
+
 export async function apiAdminInventory() {
   return request("/api/panel/admin/inventory");
 }
@@ -145,6 +158,12 @@ export async function apiAdminCreateCategory(name) {
   return request("/api/panel/admin/categories", {
     method: "POST",
     body: JSON.stringify({ name })
+  });
+}
+
+export async function apiAdminDeleteCategory(name) {
+  return request(`/api/panel/admin/categories/${encodeURIComponent(name)}`, {
+    method: "DELETE"
   });
 }
 

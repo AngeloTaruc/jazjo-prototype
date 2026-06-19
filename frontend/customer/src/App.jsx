@@ -58,6 +58,7 @@ import {
   apiProducts,
   apiProfile,
   apiReconcilePayment,
+  apiRepayOrder,
   apiRedeemReward,
   apiRegister,
   apiRewards,
@@ -68,6 +69,8 @@ import {
   FAVORITES_KEY,
   ORDERS_KEY,
   canAddCartQuantity,
+  canAccessPanelRoute,
+  canRepayOrder,
   clearSession,
   currentCustomerEmail,
   formatQty,
@@ -313,9 +316,11 @@ export default function App() {
   );
   const [message, setMessage] = useState("");
   const [loadingProducts, setLoadingProducts] = useState(true);
+  const currentRole = String(localStorage.getItem("jazjo_role") || "").toLowerCase();
+  const isPanelRoute = route.startsWith("admin/") || route.startsWith("staff/");
   const isCustomerArea = !["home", "products", "login", "register"].includes(
     route,
-  );
+  ) && !isPanelRoute;
   const isDark = mode === "dark";
 
   const setCart = (next) => {
@@ -475,14 +480,21 @@ export default function App() {
     navigate("home");
   };
 
-  const isPanelRoute = route.startsWith("admin/") || route.startsWith("staff/");
+  useEffect(() => {
+    if (!isPanelRoute || canAccessPanelRoute(route, currentRole)) return;
+    setMessage("That panel is only available to authorized staff.");
+    navigate(currentRole === "staff" ? "staff/dashboard" : "dashboard");
+  }, [route, currentRole, isPanelRoute]);
+
+  const canRenderPanelRoute = isPanelRoute && canAccessPanelRoute(route, currentRole);
+
   return (
     <motion.div
       className={`min-h-screen transition-colors ${isDark ? "bg-[#080b12] text-slate-100" : "bg-slate-50 text-slate-950"}`}
       initial={false}
       animate
     >
-      {isPanelRoute ? (
+      {canRenderPanelRoute ? (
         route.startsWith("admin/") ? (
           <AdminPanel
             isDark={isDark}
@@ -1710,6 +1722,7 @@ function OrdersPage({ orders, refreshOrders, onNavigate, setMessage }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [checkingPayment, setCheckingPayment] = useState("");
+  const [repayingOrder, setRepayingOrder] = useState("");
   useEffect(() => {
     setLoading(true);
     refreshOrders()
@@ -1738,6 +1751,22 @@ function OrdersPage({ orders, refreshOrders, onNavigate, setMessage }) {
       setMessage?.(err.message || "Unable to check payment right now.");
     } finally {
       setCheckingPayment("");
+    }
+  };
+  const repayOrder = async (order) => {
+    if (!order?.id) return;
+    setRepayingOrder(order.id);
+    try {
+      const result = await apiRepayOrder(order.id);
+      if (result.checkoutUrl) {
+        window.location.href = result.checkoutUrl;
+        return;
+      }
+      setMessage?.("PayMongo did not return a checkout link.");
+    } catch (err) {
+      setMessage?.(err.message || "Unable to start payment again.");
+    } finally {
+      setRepayingOrder("");
     }
   };
   const statuses = [
@@ -1858,15 +1887,28 @@ function OrdersPage({ orders, refreshOrders, onNavigate, setMessage }) {
                 {money(latestOrder.total)}
               </strong>
               {isPendingPaymentOrder(latestOrder) ? (
-                <Button
-                  color="warning"
-                  variant="flat"
-                  isDisabled={checkingPayment === latestOrder.id}
-                  onPress={() => checkPayment(latestOrder)}
-                >
-                  <CreditCard size={16} />
-                  {checkingPayment === latestOrder.id ? "Checking..." : "Check Payment"}
-                </Button>
+                <>
+                  {canRepayOrder(latestOrder) ? (
+                    <Button
+                      color="success"
+                      variant="flat"
+                      isDisabled={repayingOrder === latestOrder.id}
+                      onPress={() => repayOrder(latestOrder)}
+                    >
+                      <CreditCard size={16} />
+                      {repayingOrder === latestOrder.id ? "Opening..." : "Pay Again"}
+                    </Button>
+                  ) : null}
+                  <Button
+                    color="warning"
+                    variant="flat"
+                    isDisabled={checkingPayment === latestOrder.id}
+                    onPress={() => checkPayment(latestOrder)}
+                  >
+                    <CreditCard size={16} />
+                    {checkingPayment === latestOrder.id ? "Checking..." : "Check Payment"}
+                  </Button>
+                </>
               ) : null}
               <Button
                 color="success"
@@ -1919,7 +1961,9 @@ function OrdersPage({ orders, refreshOrders, onNavigate, setMessage }) {
             index={idx}
             onNavigate={onNavigate}
             onCheckPayment={checkPayment}
+            onRepay={repayOrder}
             isCheckingPayment={checkingPayment === order.id}
+            isRepaying={repayingOrder === order.id}
           />
         ))}
         {!loading && filtered.length === 0 ? (
@@ -2638,10 +2682,8 @@ function paymentStatusColor(label) {
 }
 
 function isPendingPaymentOrder(order) {
-  return (
-    statusLabel(order?.status) === "Pending Payment" &&
-    paymentStatusLabel(order?.paymentStatus, order?.status) !== "Paid"
-  );
+  return statusLabel(order?.status) === "Pending Payment" &&
+    paymentStatusLabel(order?.paymentStatus, order?.status) !== "Paid";
 }
 
 function statusProgress(status) {
@@ -2681,7 +2723,9 @@ function OrderListCard({
   index,
   onNavigate,
   onCheckPayment,
+  onRepay,
   isCheckingPayment,
+  isRepaying,
 }) {
   const label = statusLabel(order.status);
   const itemSummary =
@@ -2719,18 +2763,34 @@ function OrderListCard({
                 {money(order.total)}
               </strong>
               {isPendingPaymentOrder(order) ? (
-                <Tooltip content="Ask PayMongo for the latest payment state" placement="top" showArrow>
-                  <Button
-                    color="warning"
-                    variant="flat"
-                    size="sm"
-                    isDisabled={isCheckingPayment}
-                    onPress={() => onCheckPayment?.(order)}
-                  >
-                    <CreditCard size={14} />
-                    {isCheckingPayment ? "Checking..." : "Check Payment"}
-                  </Button>
-                </Tooltip>
+                <>
+                  {canRepayOrder(order) ? (
+                    <Tooltip content="Open a new QRPH checkout" placement="top" showArrow>
+                      <Button
+                        color="success"
+                        variant="flat"
+                        size="sm"
+                        isDisabled={isRepaying}
+                        onPress={() => onRepay?.(order)}
+                      >
+                        <CreditCard size={14} />
+                        {isRepaying ? "Opening..." : "Pay Again"}
+                      </Button>
+                    </Tooltip>
+                  ) : null}
+                  <Tooltip content="Ask PayMongo for the latest payment state" placement="top" showArrow>
+                    <Button
+                      color="warning"
+                      variant="flat"
+                      size="sm"
+                      isDisabled={isCheckingPayment}
+                      onPress={() => onCheckPayment?.(order)}
+                    >
+                      <CreditCard size={14} />
+                      {isCheckingPayment ? "Checking..." : "Check Payment"}
+                    </Button>
+                  </Tooltip>
+                </>
               ) : null}
               <Tooltip content="View order details" placement="top" showArrow>
                 <Button
