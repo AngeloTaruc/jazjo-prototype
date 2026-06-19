@@ -90,3 +90,13 @@ test("validatePasswordComplexity requires mixed character classes", () => {
     /Password must include uppercase, lowercase, number, and special character/
   );
 });
+
+test("normalizeReturnBaseUrl accepts only http origins", () => {
+  assert.equal(server.normalizeReturnBaseUrl("https://jazjo.example.com/customer-app/#/cart"), "https://jazjo.example.com");
+  assert.equal(server.normalizeReturnBaseUrl("javascript:alert(1)"), "http://localhost:3000");
+});
+
+test("isPaymongoProcessingStatusError detects asynchronous source state", () => {
+  assert.equal(server.isPaymongoProcessingStatusError(new Error("Source src_123 has processing status")), true);
+  assert.equal(server.isPaymongoProcessingStatusError(new Error("Invalid token")), false);
+});

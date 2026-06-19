@@ -1466,6 +1466,7 @@ function CartPage({ products, cart, setCart, refreshOrders, setMessage }) {
     if (!contact.ok) return setMessage(contact.message);
     const result = await apiCreateOrder({
       ...form,
+      returnBaseUrl: window.location.origin,
       items: lines.map((line) => ({
         productId: line.product.id,
         qty: line.caseTotal,
