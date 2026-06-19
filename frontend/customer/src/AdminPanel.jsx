@@ -382,6 +382,7 @@ function AdminOrdersPage({ setMessage }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("All");
+  const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [deletingOrder, setDeletingOrder] = useState("");
   const [selectedOrder, setSelectedOrder] = useState(null);
@@ -400,13 +401,27 @@ function AdminOrdersPage({ setMessage }) {
   }, []);
   useEffect(() => { load(); }, [load]);
   const filtered = useMemo(() => {
-    if (filter === "All") return orders;
-    return orders.filter((o) => statusLabel(o.status) === filter);
-  }, [orders, filter]);
+    const query = search.trim().toLowerCase();
+    return orders.filter((order) => {
+      const matchesStatus = filter === "All" || statusLabel(order.status) === filter;
+      if (!matchesStatus) return false;
+      if (!query) return true;
+      const haystack = [
+        order.id,
+        order.customerName,
+        order.contact,
+        order.createdAt,
+        statusLabel(order.status),
+        order.paymentStatus,
+        ...(order.items || []).map((item) => item.name)
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [orders, filter, search]);
   const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
   const safePage = Math.min(page, totalPages);
   const paged = filtered.slice((safePage - 1) * perPage, safePage * perPage);
-  useEffect(() => { setPage(1); }, [filter]);
+  useEffect(() => { setPage(1); }, [filter, search]);
   const updateStatus = async (orderCode, newStatus) => {
     try {
       await apiUpdateOrderStatus(orderCode, newStatus);
@@ -443,8 +458,21 @@ function AdminOrdersPage({ setMessage }) {
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <Card>
         <CardBody className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-black">Order Management</h2>
-          <Button size="sm" variant="flat" startContent={<RefreshCw size={14} />} onPress={load}>Refresh</Button>
+          <div>
+            <h2 className="text-lg font-black">Order Management</h2>
+            <p className="text-sm text-slate-400">{filtered.length} of {orders.length} order(s)</p>
+          </div>
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[420px] sm:flex-row sm:items-center">
+            <HeroInput
+              aria-label="Search orders"
+              placeholder="Search order ID, customer, item..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              startContent={<Search size={16} />}
+              size="sm"
+            />
+            <Button size="sm" variant="flat" startContent={<RefreshCw size={14} />} onPress={load}>Refresh</Button>
+          </div>
         </CardBody>
       </Card>
       <Tabs selectedKey={filter} onSelectionChange={(key) => setFilter(String(key))} color="success" variant="underlined" size="sm">

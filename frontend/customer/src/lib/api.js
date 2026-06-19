@@ -3,6 +3,7 @@ import { ORDERS_KEY, getToken, normalizeCategory, placeholderImage, readStorage,
 async function request(path, options = {}) {
   const token = getToken();
   const res = await fetch(path, {
+    cache: "no-store",
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -17,7 +18,11 @@ async function request(path, options = {}) {
   } catch {
     data = { error: text || "Invalid server response" };
   }
-  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(data?.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -82,6 +87,7 @@ export async function apiOrderDetails(orderCode) {
     const data = await request(`/api/orders/${encodeURIComponent(orderCode)}`);
     return data.order ? normalizeOrder(data.order) : null;
   } catch (err) {
+    if (err.status === 404) throw err;
     const cached = readStorage(ORDERS_KEY, []).find((order) => String(order.id || order.order_code) === String(orderCode));
     if (cached) return normalizeOrder(cached);
     throw err;
@@ -141,9 +147,13 @@ export async function apiAdminOrders() {
 }
 
 export async function apiAdminDeleteOrder(orderCode) {
-  return request(`/api/panel/admin/orders/${encodeURIComponent(orderCode)}`, {
+  const result = await request(`/api/panel/admin/orders/${encodeURIComponent(orderCode)}`, {
     method: "DELETE"
   });
+  if (result?.deleted === false) {
+    throw new Error(`Order ${orderCode} was not found on the server.`);
+  }
+  return result;
 }
 
 export async function apiAdminInventory() {

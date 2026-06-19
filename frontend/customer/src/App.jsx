@@ -305,7 +305,7 @@ function useHashRoute() {
 export default function App() {
   const [route, navigate] = useHashRoute();
   const [products, setProducts] = useState([]);
-  const [orders, setOrders] = useState(() => readStorage(ORDERS_KEY, []));
+  const [orders, setOrders] = useState([]);
   const [cart, setCartState] = useState(() => readStorage(CART_KEY, []));
   const [favorites, setFavoritesState] = useState(() =>
     readStorage(FAVORITES_KEY, []),
@@ -366,6 +366,24 @@ export default function App() {
     Toast.toast[toastVariant(message)](message, { timeout: 3200 });
     setMessage("");
   }, [message]);
+
+  useEffect(() => {
+    if (!(route === "orders" || route.startsWith("order/"))) return undefined;
+
+    const refreshVisibleOrders = () => {
+      if (document.visibilityState === "visible") {
+        refreshOrders().catch((err) => setMessage(err.message));
+      }
+    };
+
+    refreshVisibleOrders();
+    window.addEventListener("focus", refreshVisibleOrders);
+    document.addEventListener("visibilitychange", refreshVisibleOrders);
+    return () => {
+      window.removeEventListener("focus", refreshVisibleOrders);
+      document.removeEventListener("visibilitychange", refreshVisibleOrders);
+    };
+  }, [route]);
 
   useEffect(() => {
     const paid = new URLSearchParams(window.location.search).get("paid");

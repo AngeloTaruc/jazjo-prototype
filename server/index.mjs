@@ -73,9 +73,15 @@ const PRODUCT_IMAGE_ALLOWED_TYPES = new Map([
   ["image/webp", "webp"],
   ["image/gif", "gif"]
 ]);
+const CUSTOMER_PENDING_ORDER_TTL_MS = 24 * 60 * 60 * 1000;
 
 function sendJson(res, status, body){
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    Pragma: "no-cache",
+    Expires: "0"
+  });
   res.end(JSON.stringify(body));
 }
 
@@ -319,6 +325,16 @@ function toUiOrder(order, items = [], events = []){
     })),
     status_events: events
   };
+}
+
+function isStaleCustomerPendingOrder(order, now = Date.now()){
+  const status = String(order?.status || "").toLowerCase();
+  const paymentStatus = String(order?.payment_status || "").toLowerCase();
+  if(status !== "pending_payment" || paymentStatus === "paid") return false;
+
+  const createdAt = Date.parse(order?.created_at || "");
+  if(!Number.isFinite(createdAt)) return false;
+  return now - createdAt > CUSTOMER_PENDING_ORDER_TTL_MS;
 }
 
 function makeOrderCode(){
@@ -1503,16 +1519,17 @@ async function listOrdersForUserId(userId){
     `/rest/v1/orders?select=id,order_code,user_id,customer_name,contact,address,subtotal,delivery_fee,total,status,payment_status,payment_method,created_at&user_id=eq.${userId}&order=created_at.desc`,
     { serviceRole: true }
   );
-  if(!orders.length) return [];
+  const visibleOrders = orders.filter(order => !isStaleCustomerPendingOrder(order));
+  if(!visibleOrders.length) return [];
 
-  const orderIds = orders.map(o => o.id);
+  const orderIds = visibleOrders.map(o => o.id);
   const inFilter = encodeURIComponent(`(${escapeCsvValues(orderIds)})`);
   const [items, events] = await Promise.all([
     supabaseRequest(`/rest/v1/order_items?select=order_id,sku,name,image_url,unit_price,qty&order_id=in.${inFilter}&order=created_at.asc`, { serviceRole: true }),
     supabaseRequest(`/rest/v1/order_status_events?select=order_id,status,note,created_at&order_id=in.${inFilter}&order=created_at.asc`, { serviceRole: true })
   ]);
 
-  return orders.map(order =>
+  return visibleOrders.map(order =>
     toUiOrder(
       order,
       items.filter(i => i.order_id === order.id),
@@ -2299,6 +2316,9 @@ async function handleApi(req, res, url){
     await requireAuth(req, ["admin"]);
     const orderCode = decodeURIComponent(url.pathname.replace("/api/panel/admin/orders/", ""));
     const result = await deleteOrderByCode(orderCode);
+    if(!result.deleted){
+      throw httpError(`Order ${orderCode} was not found.`, 404);
+    }
     sendJson(res, 200, { ok: true, ...result });
     return true;
   }
