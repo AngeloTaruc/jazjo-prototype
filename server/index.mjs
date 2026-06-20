@@ -78,6 +78,8 @@ const PRODUCT_IMAGE_ALLOWED_TYPES = new Map([
   ["image/gif", "gif"]
 ]);
 const PSGC_API_BASE = "https://psgc.gitlab.io/api";
+const METRO_MANILA_CODE = "130000000";
+const METRO_MANILA_LOCATION = { code: METRO_MANILA_CODE, name: "Metro Manila", regionCode: METRO_MANILA_CODE };
 const CUSTOMER_PENDING_ORDER_TTL_MS = 24 * 60 * 60 * 1000;
 const locationCache = new Map();
 const registrationVerificationCodes = new Map();
@@ -342,7 +344,7 @@ async function createRegistrationVerificationCode(payload){
   };
 }
 
-function verifyRegistrationCode(email, code){
+function verifyRegistrationCode(email, code, { consume = true } = {}){
   const normalizedEmail = validateGmailEmail(email);
   const normalizedCode = String(code || "").trim();
   const saved = registrationVerificationCodes.get(normalizedEmail);
@@ -353,7 +355,7 @@ function verifyRegistrationCode(email, code){
   if(saved.code !== normalizedCode){
     throw httpError("Verification code is incorrect.");
   }
-  registrationVerificationCodes.delete(normalizedEmail);
+  if(consume) registrationVerificationCodes.delete(normalizedEmail);
   return true;
 }
 
@@ -361,8 +363,15 @@ function normalizePsgcLocation(entry){
   return {
     code: String(entry?.code || "").trim(),
     name: String(entry?.name || "").trim(),
-    provinceCode: String(entry?.provinceCode || entry?.province_code || "").trim()
+    provinceCode: String(entry?.provinceCode || entry?.province_code || "").trim(),
+    regionCode: String(entry?.regionCode || entry?.region_code || "").trim()
   };
+}
+
+function getPsgcCitiesPath(locationCode){
+  const code = String(locationCode || "").trim();
+  const scope = code === METRO_MANILA_CODE ? "regions" : "provinces";
+  return `/${scope}/${encodeURIComponent(code)}/cities-municipalities/`;
 }
 
 async function fetchPsgc(pathname){
@@ -387,10 +396,13 @@ async function fetchPsgc(pathname){
 
 async function listPsgcProvinces(){
   const data = await fetchPsgc("/provinces/");
-  return (Array.isArray(data) ? data : data?.data || [])
+  const provinces = (Array.isArray(data) ? data : data?.data || [])
     .map(normalizePsgcLocation)
-    .filter((entry) => entry.code && entry.name)
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .filter((entry) => entry.code && entry.name);
+  if(!provinces.some((entry) => entry.code === METRO_MANILA_CODE)){
+    provinces.push(METRO_MANILA_LOCATION);
+  }
+  return provinces.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function getPsgcProvince(provinceCode){
@@ -409,7 +421,7 @@ async function listPsgcProvinceCities(provinceCode){
   if(!code) throw httpError("Please choose a province.");
   let rows = [];
   try{
-    const data = await fetchPsgc(`/provinces/${encodeURIComponent(code)}/cities-municipalities/`);
+    const data = await fetchPsgc(getPsgcCitiesPath(code));
     rows = Array.isArray(data) ? data : data?.data || [];
   }catch(err){
     if(Number(err?.status || 0) !== 502 && Number(err?.status || 0) !== 404) throw err;
@@ -2402,6 +2414,13 @@ async function handleApi(req, res, url){
     return true;
   }
 
+  if(req.method === "POST" && url.pathname === "/api/auth/register/verify-code"){
+    const payload = await readJson(req);
+    verifyRegistrationCode(payload?.email, payload?.verificationCode || payload?.verification_code, { consume: false });
+    sendJson(res, 200, { ok: true, message: "Verification code confirmed." });
+    return true;
+  }
+
   if(req.method === "POST" && url.pathname === "/api/auth/register"){
     const payload = await readJson(req);
     const result = await registerCustomerAccount(payload);
@@ -2719,6 +2738,7 @@ if(!process.env.VERCEL){
 export {
   PRODUCT_IMAGE_MAX_BYTES,
   buildEmailJsVerificationPayload,
+  getPsgcCitiesPath,
   handleRequest,
   isPaymongoProcessingStatusError,
   normalizeReturnBaseUrl,

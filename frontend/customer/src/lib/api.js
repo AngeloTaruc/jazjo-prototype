@@ -1,6 +1,8 @@
 import { ORDERS_KEY, getToken, normalizeCategory, placeholderImage, readStorage, statusLabel } from "./customerLogic.js";
 
 const PSGC_API_BASE = "https://psgc.gitlab.io/api";
+const METRO_MANILA_CODE = "130000000";
+const METRO_MANILA_LOCATION = { code: METRO_MANILA_CODE, name: "Metro Manila", regionCode: METRO_MANILA_CODE };
 
 async function request(path, options = {}) {
   const token = getToken();
@@ -48,7 +50,8 @@ function normalizePsgcList(data) {
     .map((entry) => ({
       code: String(entry?.code || "").trim(),
       name: String(entry?.name || "").trim(),
-      provinceCode: String(entry?.provinceCode || entry?.province_code || "").trim()
+      provinceCode: String(entry?.provinceCode || entry?.province_code || "").trim(),
+      regionCode: String(entry?.regionCode || entry?.region_code || "").trim()
     }))
     .filter((entry) => entry.code && entry.name)
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -78,6 +81,13 @@ export async function apiRequestRegistrationCode(email) {
   });
 }
 
+export async function apiVerifyRegistrationCode(email, verificationCode) {
+  return request("/api/auth/register/verify-code", {
+    method: "POST",
+    body: JSON.stringify({ email, verificationCode })
+  });
+}
+
 export async function apiProducts() {
   const data = await request("/api/products");
   return (data.products || []).map((p) => ({
@@ -96,13 +106,19 @@ export async function apiProducts() {
 
 export async function apiProvinces() {
   const data = await psgcRequest("/provinces/");
-  return normalizePsgcList(data);
+  const provinces = normalizePsgcList(data);
+  if (!provinces.some((entry) => entry.code === METRO_MANILA_CODE)) {
+    provinces.push(METRO_MANILA_LOCATION);
+  }
+  return provinces.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function apiProvinceCities(provinceCode) {
   if (!provinceCode) return [];
+  const code = String(provinceCode);
+  const scope = code === METRO_MANILA_CODE ? "regions" : "provinces";
   try {
-    const data = await psgcRequest(`/provinces/${encodeURIComponent(provinceCode)}/cities-municipalities/`);
+    const data = await psgcRequest(`/${scope}/${encodeURIComponent(code)}/cities-municipalities/`);
     return normalizePsgcList(data);
   } catch (err) {
     let list = [];
@@ -115,7 +131,9 @@ export async function apiProvinceCities(provinceCode) {
       ]);
       list = [...cities, ...municipalities];
     }
-    return list.filter((entry) => entry.provinceCode === String(provinceCode));
+    return list.filter((entry) => code === METRO_MANILA_CODE
+      ? entry.regionCode === code
+      : entry.provinceCode === code);
   }
 }
 

@@ -138,6 +138,13 @@ export function formatQty(value) {
   return Number.isInteger(num) ? String(num) : num.toFixed(2).replace(/\.?0+$/, "");
 }
 
+export function formatCountdown(totalSeconds) {
+  const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 export function money(value) {
   return `PHP ${Number(value || 0).toLocaleString("en-PH", { minimumFractionDigits: 0 })}`;
 }

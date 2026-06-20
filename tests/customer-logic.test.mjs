@@ -5,6 +5,7 @@ import {
   canAddCartQuantity,
   canAccessPanelRoute,
   canRepayOrder,
+  formatCountdown,
   isRetryablePaymentReason,
   normalizeCategory,
   paymentStatusLabel,
@@ -123,4 +124,10 @@ test("validatePassword requires exactly 8 complex characters", () => {
   assert.equal(validatePassword("Aa12345!").ok, true);
   assert.equal(validatePassword("StrongPass1!").ok, false);
   assert.equal(validatePassword("password123").ok, false);
+});
+
+test("formatCountdown formats verification timers", () => {
+  assert.equal(formatCountdown(600), "10:00");
+  assert.equal(formatCountdown(65), "01:05");
+  assert.equal(formatCountdown(0), "00:00");
 });

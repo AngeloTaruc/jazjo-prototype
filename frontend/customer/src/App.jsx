@@ -64,6 +64,7 @@ import {
   apiRedeemReward,
   apiRegister,
   apiRequestRegistrationCode,
+  apiVerifyRegistrationCode,
   apiRewards,
   apiSaveProfile,
 } from "./lib/api.js";
@@ -76,6 +77,7 @@ import {
   canRepayOrder,
   clearSession,
   currentCustomerEmail,
+  formatCountdown,
   formatQty,
   getToken,
   isRetryablePaymentReason,
@@ -97,6 +99,32 @@ const CATEGORY_OPTIONS = ["Soft Drinks", "Water", "Energy Drinks", "Juice"];
 const PACK_OPTIONS = [
   { label: "1 case", caseQty: 1 },
   { label: "Half case", caseQty: 0.5 },
+];
+const PAYMENT_METHOD_OPTIONS = [
+  {
+    value: "QRPH (GCash)",
+    label: "GCash QR",
+    description: "Scan a secure QR code using GCash.",
+    type: "qr",
+  },
+  {
+    value: "QRPH (Maya)",
+    label: "Maya QR",
+    description: "Scan a secure QR code using Maya.",
+    type: "qr",
+  },
+  {
+    value: "QRPH (Bank QR)",
+    label: "Bank QR Ph",
+    description: "Pay with a QR Ph-compatible banking app.",
+    type: "qr",
+  },
+  {
+    value: "Cash on Delivery (COD)",
+    label: "Cash on Delivery",
+    description: "Pay in cash when your order arrives.",
+    type: "cod",
+  },
 ];
 const REWARD_CATALOG = [
   {
@@ -205,7 +233,7 @@ function Input({
 }) {
   return (
     <label
-      className={`grid gap-2 text-sm font-semibold text-slate-300 ${className}`}
+      className={`grid gap-2 text-sm font-semibold text-[var(--text-secondary)] ${className}`}
     >
       {label ? (
         <span>
@@ -215,12 +243,12 @@ function Input({
       ) : null}
       <span className="relative block">
         {startContent ? (
-          <span className="pointer-events-none absolute left-3 top-1/2 z-10 grid -translate-y-1/2 text-slate-500">
+          <span className="pointer-events-none absolute left-3 top-1/2 z-10 grid -translate-y-1/2 text-[var(--text-muted)]">
             {startContent}
           </span>
         ) : null}
         {endContent ? (
-          <span className="absolute right-3 top-1/2 z-10 grid -translate-y-1/2 text-slate-400">
+          <span className="absolute right-3 top-1/2 z-10 grid -translate-y-1/2 text-[var(--text-muted)]">
             {endContent}
           </span>
         ) : null}
@@ -232,7 +260,7 @@ function Input({
           required={isRequired}
           placeholder={placeholder}
           onChange={(event) => onValueChange?.(event.target.value)}
-          className={`min-h-11 w-full rounded-xl border border-white/10 bg-white/[.06] text-slate-50 outline-none ${startContent ? "pl-11" : ""} ${endContent ? "pr-11" : ""}`}
+          className={`min-h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-input)] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] ${startContent ? "pl-11" : ""} ${endContent ? "pr-11" : ""}`}
         />
       </span>
     </label>
@@ -308,13 +336,13 @@ function DeliveryAddressSelect({
     });
   };
 
-  const selectTriggerClass = "min-h-11 rounded-xl border border-white/10 bg-white/[.06] px-3 text-left text-sm font-semibold text-slate-50";
-  const popoverClass = "max-h-72 min-w-64 overflow-y-auto rounded-2xl border border-white/10 bg-slate-950 p-1 shadow-2xl shadow-black/40";
-  const itemClass = "rounded-xl px-3 py-2 text-sm text-slate-100 data-[selected=true]:bg-emerald-500/20 data-[selected=true]:text-emerald-200";
+  const selectTriggerClass = "min-h-11 rounded-xl border border-[var(--border)] bg-[var(--bg-input)] px-3 text-left text-sm font-semibold text-[var(--text-primary)]";
+  const popoverClass = "max-h-72 min-w-64 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-1 shadow-2xl";
+  const itemClass = "rounded-xl px-3 py-2 text-sm text-[var(--text-primary)] data-[selected=true]:bg-emerald-500/20 data-[selected=true]:text-[var(--accent-text)]";
 
   return (
     <div className={`grid gap-3 ${className}`}>
-      <span className="text-sm font-semibold text-slate-300">
+      <span className="text-sm font-semibold text-[var(--text-secondary)]">
         Delivery Address{isRequired ? " *" : ""}
       </span>
       <Input
@@ -343,7 +371,7 @@ function DeliveryAddressSelect({
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <Select
-          aria-label="Province"
+          aria-label="Province or Metro Manila"
           selectedKey={selected.provinceCode || ""}
           onSelectionChange={(key) => selectProvince(String(key))}
           fullWidth
@@ -351,12 +379,12 @@ function DeliveryAddressSelect({
         >
           <Select.Trigger className={selectTriggerClass}>
             <Select.Value>
-              {selected.provinceName || (loadingProvinces ? "Loading provinces..." : "Choose province")}
+              {selected.provinceName || (loadingProvinces ? "Loading locations..." : "Choose province or Metro Manila")}
             </Select.Value>
             <Select.Indicator />
           </Select.Trigger>
           <Select.Popover placement="bottom start" className={popoverClass}>
-            <ListBox aria-label="Province" selectionMode="single">
+            <ListBox aria-label="Province or Metro Manila" selectionMode="single">
               {provinces.map((province) => (
                 <ListBox.Item
                   id={province.code}
@@ -1907,33 +1935,61 @@ function CartPage({ products, cart, setCart, refreshOrders, setMessage }) {
               setMessage={setMessage}
             />
             <div className="grid gap-2">
-              <span className="text-sm font-semibold text-slate-300">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-semibold text-[var(--text-secondary)]">
                 Payment Method
-              </span>
+                </span>
+                <Chip size="sm" color="success" variant="flat">
+                  {PAYMENT_METHOD_OPTIONS.find((method) => method.value === form.paymentMethod)?.label}
+                </Chip>
+              </div>
               <div className="grid gap-2 sm:grid-cols-2">
-                {[
-                  "QRPH (GCash)",
-                  "QRPH (Maya)",
-                  "QRPH (Bank QR)",
-                  "Cash on Delivery (COD)",
-                ].map((method) => (
-                  <Button
-                    key={method}
-                    color={
-                      form.paymentMethod === method ? "success" : "default"
-                    }
-                    variant={
-                      form.paymentMethod === method ? "flat" : "bordered"
-                    }
-                    onPress={() => setForm({ ...form, paymentMethod: method })}
-                  >
-                    {method}
-                  </Button>
-                ))}
+                {PAYMENT_METHOD_OPTIONS.map((method) => {
+                  const selected = form.paymentMethod === method.value;
+                  return (
+                    <label
+                      key={method.value}
+                      className={`relative flex min-h-24 cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors ${
+                        selected
+                          ? "border-emerald-400 bg-emerald-400/10 ring-1 ring-emerald-400/40"
+                          : "border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]"
+                      }`}
+                    >
+                      <input
+                        className="sr-only"
+                        type="radio"
+                        name="paymentMethod"
+                        value={method.value}
+                        checked={form.paymentMethod === method.value}
+                        onChange={() => setForm({ ...form, paymentMethod: method.value })}
+                      />
+                      <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${selected ? "bg-emerald-400 text-slate-950" : "bg-[var(--bg-card-alt)] text-[var(--text-secondary)]"}`}>
+                        {method.type === "cod" ? <Truck size={18} /> : <CreditCard size={18} />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-black text-[var(--text-heading)]">
+                          {method.label}
+                        </span>
+                        <span className="mt-1 block text-xs leading-5 text-[var(--text-muted)]">
+                          {method.description}
+                        </span>
+                      </span>
+                      <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${selected ? "border-emerald-400 bg-emerald-400 text-slate-950" : "border-[var(--border-strong)]"}`}>
+                        {selected ? <ShieldCheck size={13} /> : null}
+                      </span>
+                      {selected ? (
+                        <span className="absolute bottom-2 right-3 text-[10px] font-black uppercase text-emerald-300">
+                          Selected
+                        </span>
+                      ) : null}
+                    </label>
+                  );
+                })}
               </div>
             </div>
             <Button color="success" type="submit" className="w-full">
-              Place Order
+              {form.paymentMethod.startsWith("QRPH") ? <CreditCard size={16} /> : <Truck size={16} />}
+              {form.paymentMethod.startsWith("QRPH") ? "Continue to QR Payment" : "Place COD Order"}
             </Button>
           </form>
         </CardBody>
@@ -2684,7 +2740,7 @@ function LoginPage({ onNavigate, setMessage }) {
           endContent={
             <button
               type="button"
-              className="grid rounded-full p-1 text-slate-400 transition hover:text-slate-100"
+              className="grid rounded-full p-1 text-[var(--text-muted)] transition hover:text-[var(--accent-text)]"
               aria-label={showPassword ? "Hide password" : "Show password"}
               onClick={() => setShowPassword((value) => !value)}
             >
@@ -2724,23 +2780,80 @@ function RegisterPage({ onNavigate, setMessage }) {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
-  const requestCode = async () => {
+  const [verifyingCode, setVerifyingCode] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false);
+  const [verificationModalOpen, setVerificationModalOpen] = useState(false);
+  const [verificationExpiresIn, setVerificationExpiresIn] = useState(0);
+  const [resendAvailableIn, setResendAvailableIn] = useState(0);
+  const [verificationError, setVerificationError] = useState("");
+  const verificationTimerActive = verificationExpiresIn > 0 || resendAvailableIn > 0;
+
+  useEffect(() => {
+    if (!verificationTimerActive) return undefined;
+    const timer = window.setInterval(() => {
+      setVerificationExpiresIn((value) => Math.max(0, value - 1));
+      setResendAvailableIn((value) => Math.max(0, value - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [verificationTimerActive]);
+
+  useEffect(() => {
+    if (verificationExpiresIn <= 0) setEmailVerified(false);
+  }, [verificationExpiresIn]);
+
+  const requestCode = async (fromModal = false) => {
     setAuthMessage("");
     setAuthMessageStatus("danger");
+    setVerificationError("");
     const email = validateGmailAddress(form.email);
-    if (!email.ok) return setAuthMessage(email.message);
+    if (!email.ok) {
+      if (fromModal) setVerificationError(email.message);
+      else setAuthMessage(email.message);
+      return;
+    }
     setSendingCode(true);
     try {
       const result = await apiRequestRegistrationCode(email.value);
+      setForm((current) => ({ ...current, verificationCode: "" }));
+      setEmailVerified(false);
+      setVerificationExpiresIn(10 * 60);
+      setResendAvailableIn(60);
+      setVerificationModalOpen(true);
       setAuthMessageStatus("success");
       setAuthMessage(result.devCode
         ? `Verification code sent. Dev code: ${result.devCode}`
         : "Verification code sent to your email.");
     } catch (err) {
       setAuthMessageStatus("danger");
-      setAuthMessage(err.message);
+      if (fromModal) setVerificationError(err.message);
+      else setAuthMessage(err.message);
     } finally {
       setSendingCode(false);
+    }
+  };
+  const confirmVerificationCode = async () => {
+    const code = String(form.verificationCode || "").trim();
+    if (!/^\d{6}$/.test(code)) {
+      setVerificationError("Enter the complete 6-digit verification code.");
+      return;
+    }
+    if (verificationExpiresIn <= 0) {
+      setVerificationError("This code has expired. Request a new code.");
+      return;
+    }
+    setVerificationError("");
+    setVerifyingCode(true);
+    try {
+      await apiVerifyRegistrationCode(form.email, code);
+      setEmailVerified(true);
+      setVerificationModalOpen(false);
+      setAuthMessageStatus("success");
+      setAuthMessage("Email verified. Complete the form to create your account.");
+    } catch (err) {
+      setEmailVerified(false);
+      setVerificationError(err.message);
+    } finally {
+      setVerifyingCode(false);
     }
   };
   const register = async (event) => {
@@ -2759,6 +2872,8 @@ function RegisterPage({ onNavigate, setMessage }) {
       return setAuthMessage("Confirm password must match password.");
     if (!String(form.verificationCode || "").trim())
       return setAuthMessage("Please enter the email verification code.");
+    if (!emailVerified || verificationExpiresIn <= 0)
+      return setAuthMessage("Please verify your email with an active code.");
     const address = validateDeliveryAddress(form.address);
     if (!address.ok) return setAuthMessage(address.message);
     try {
@@ -2799,7 +2914,12 @@ function RegisterPage({ onNavigate, setMessage }) {
           label="Email"
           type="email"
           value={form.email}
-          onValueChange={(v) => setForm({ ...form, email: v })}
+          onValueChange={(v) => {
+            setForm((current) => ({ ...current, email: v, verificationCode: "" }));
+            setEmailVerified(false);
+            setVerificationExpiresIn(0);
+            setResendAvailableIn(0);
+          }}
           className="sm:col-span-2"
           placeholder="name@gmail.com"
           startContent={<Mail size={18} />}
@@ -2823,7 +2943,7 @@ function RegisterPage({ onNavigate, setMessage }) {
           endContent={
             <button
               type="button"
-              className="grid rounded-full p-1 text-slate-400 transition hover:text-slate-100"
+              className="grid rounded-full p-1 text-[var(--text-muted)] transition hover:text-[var(--accent-text)]"
               aria-label={showPassword ? "Hide password" : "Show password"}
               onClick={() => setShowPassword((value) => !value)}
             >
@@ -2850,23 +2970,37 @@ function RegisterPage({ onNavigate, setMessage }) {
             </button>
           }
         />
-        <div className="grid gap-3 sm:col-span-2 sm:grid-cols-[1fr_auto] sm:items-end">
-          <Input
-            isRequired
-            label="Verification Code"
-            value={form.verificationCode}
-            onValueChange={(v) => setForm({ ...form, verificationCode: v })}
-            placeholder="6-digit code"
-            startContent={<ShieldCheck size={18} />}
-          />
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3 sm:col-span-2">
+          <div className="flex items-center gap-3">
+            <span className={`grid h-10 w-10 place-items-center rounded-lg ${emailVerified && verificationExpiresIn > 0 ? "bg-emerald-400/15 text-[var(--accent-text)]" : "bg-[var(--bg-card-alt)] text-[var(--text-muted)]"}`}>
+              <ShieldCheck size={19} />
+            </span>
+            <div>
+              <p className="text-sm font-black text-[var(--text-heading)]">Email Verification</p>
+              <p className="text-xs text-[var(--text-muted)]">
+                {emailVerified && verificationExpiresIn > 0
+                  ? `Email verified - code expires in ${formatCountdown(verificationExpiresIn)}`
+                  : verificationExpiresIn <= 0 && form.verificationCode
+                    ? "Code expired - request a new code"
+                    : "A 6-digit code will be sent to your Gmail address."}
+              </p>
+            </div>
+          </div>
           <Button
             type="button"
+            color={emailVerified && verificationExpiresIn > 0 ? "success" : "default"}
             variant="flat"
             isLoading={sendingCode}
-            onPress={requestCode}
+            onPress={() => {
+              if (verificationExpiresIn > 0) {
+                setVerificationModalOpen(true);
+              } else {
+                requestCode(false);
+              }
+            }}
             className="min-h-11"
           >
-            Send Code
+            {verificationExpiresIn > 0 ? "Review Verification" : "Send Verification Code"}
           </Button>
         </div>
         <DeliveryAddressSelect
@@ -2886,6 +3020,86 @@ function RegisterPage({ onNavigate, setMessage }) {
           Register
         </Button>
       </form>
+      {verificationModalOpen ? (
+        <Modal isOpen onOpenChange={setVerificationModalOpen}>
+          <Modal.Backdrop>
+            <Modal.Container size="sm">
+              <Modal.Dialog>
+                <Modal.Header>
+                  <div>
+                    <h2 className="text-lg font-black text-[var(--text-heading)]">Verify your email</h2>
+                    <p className="mt-1 text-sm text-[var(--text-muted)]">{form.email}</p>
+                  </div>
+                </Modal.Header>
+                <Modal.Body>
+                  <div className="space-y-4">
+                    {verificationError ? (
+                      <Alert status="danger">
+                        <Alert.Content>
+                          <Alert.Title>Verification failed</Alert.Title>
+                          <Alert.Description>{verificationError}</Alert.Description>
+                        </Alert.Content>
+                      </Alert>
+                    ) : null}
+                    <Input
+                      isRequired
+                      label="6-digit verification code"
+                      value={form.verificationCode}
+                      onValueChange={(value) => {
+                        const code = String(value || "").replace(/\D/g, "").slice(0, 6);
+                        setForm((current) => ({ ...current, verificationCode: code }));
+                        setEmailVerified(false);
+                        setVerificationError("");
+                      }}
+                      placeholder="000000"
+                      inputMode="numeric"
+                      maxLength={6}
+                      autoComplete="one-time-code"
+                      startContent={<ShieldCheck size={18} />}
+                    />
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3 text-sm">
+                      <span className={verificationExpiresIn > 0 ? "text-[var(--text-secondary)]" : "font-semibold text-red-500"}>
+                        {verificationExpiresIn > 0
+                          ? `Code expires in ${formatCountdown(verificationExpiresIn)}`
+                          : "Code expired"}
+                      </span>
+                      <span className="text-[var(--text-muted)]">
+                        {resendAvailableIn > 0
+                          ? `Resend in ${formatCountdown(resendAvailableIn)}`
+                          : "A new code is available"}
+                      </span>
+                    </div>
+                  </div>
+                </Modal.Body>
+                <Modal.Footer className="flex-wrap">
+                  <Button variant="flat" onPress={() => setVerificationModalOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="flat"
+                    isDisabled={resendAvailableIn > 0}
+                    isLoading={sendingCode}
+                    onPress={() => requestCode(true)}
+                  >
+                    {resendAvailableIn > 0
+                      ? `Resend in ${formatCountdown(resendAvailableIn)}`
+                      : "Resend code"}
+                  </Button>
+                  <Button
+                    color="success"
+                    isDisabled={verificationExpiresIn <= 0}
+                    isLoading={verifyingCode}
+                    onPress={confirmVerificationCode}
+                  >
+                    <ShieldCheck size={16} />
+                    Confirm Code
+                  </Button>
+                </Modal.Footer>
+              </Modal.Dialog>
+            </Modal.Container>
+          </Modal.Backdrop>
+        </Modal>
+      ) : null}
     </AuthCard>
   );
 }
@@ -2944,13 +3158,13 @@ function AuthCard({
           </div>
         </CardBody>
       </Card>
-      <Card className="border border-white/10 bg-slate-900/85 shadow-xl shadow-black/20">
+      <Card className="border border-[var(--border)] bg-[var(--bg-card)] font-sans shadow-xl shadow-black/20">
         <CardHeader className="items-start justify-between gap-4">
           <div>
-            <h2 className="text-2xl font-black text-white">{title}</h2>
-            <p className="text-sm text-slate-400">{subtitle}</p>
+            <h2 className="text-2xl font-black text-[var(--text-heading)]">{title}</h2>
+            <p className="text-sm text-[var(--text-muted)]">{subtitle}</p>
           </div>
-          <Button size="sm" variant="flat" onPress={onAction}>
+          <Button className="text-[var(--text-primary)]" size="sm" variant="flat" onPress={onAction}>
             {actionLabel}
           </Button>
         </CardHeader>
@@ -3161,8 +3375,8 @@ function Metric({ label, value }) {
     <motion.div whileHover={{ y: -2, transition: { duration: 0.2 } }}>
       <Card>
         <CardBody>
-          <p className="text-sm text-slate-400">{label}</p>
-          <strong className="mt-2 block truncate text-2xl text-white">
+          <p className="text-sm text-[var(--text-muted)]">{label}</p>
+          <strong className="mt-2 block truncate text-2xl text-[var(--text-heading)]">
             {value}
           </strong>
         </CardBody>
@@ -3182,7 +3396,7 @@ function Summary({ subtotal, deliveryFee, total }) {
         <span>Delivery</span>
         <strong>{money(deliveryFee)}</strong>
       </div>
-      <div className="flex justify-between text-lg text-white">
+      <div className="flex justify-between text-lg text-[var(--text-heading)]">
         <span>Total</span>
         <strong>{money(total)}</strong>
       </div>

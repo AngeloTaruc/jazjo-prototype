@@ -132,6 +132,17 @@ test("buildEmailJsVerificationPayload matches the verification template variable
   });
 });
 
+test("getPsgcCitiesPath uses the NCR region endpoint for Metro Manila", () => {
+  assert.equal(
+    server.getPsgcCitiesPath("130000000"),
+    "/regions/130000000/cities-municipalities/"
+  );
+  assert.equal(
+    server.getPsgcCitiesPath("030800000"),
+    "/provinces/030800000/cities-municipalities/"
+  );
+});
+
 test("normalizeReturnBaseUrl accepts only http origins", () => {
   assert.equal(server.normalizeReturnBaseUrl("https://jazjo.example.com/customer-app/#/cart"), "https://jazjo.example.com");
   assert.equal(server.normalizeReturnBaseUrl("javascript:alert(1)"), "http://localhost:3000");
