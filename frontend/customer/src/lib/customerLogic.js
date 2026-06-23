@@ -3,6 +3,30 @@ export const CART_KEY = "jazjo_cart_v1";
 export const ORDERS_KEY = "jazjo_orders_v1";
 export const FAVORITES_KEY = "jazjo_favorites_v1";
 export const REWARDS_KEY = "jazjo_rewards_v1";
+export const DEFAULT_DELIVERY_SETTINGS = {
+  deliveryFee: 60,
+  freeDeliveryMinimum: 800
+};
+
+export function normalizeDeliverySettings(settings = {}) {
+  const deliveryFee = Number(settings.deliveryFee ?? settings.delivery_fee);
+  const freeDeliveryMinimum = Number(settings.freeDeliveryMinimum ?? settings.free_delivery_minimum);
+  return {
+    deliveryFee: Number.isFinite(deliveryFee) && deliveryFee >= 0
+      ? deliveryFee
+      : DEFAULT_DELIVERY_SETTINGS.deliveryFee,
+    freeDeliveryMinimum: Number.isFinite(freeDeliveryMinimum) && freeDeliveryMinimum >= 0
+      ? freeDeliveryMinimum
+      : DEFAULT_DELIVERY_SETTINGS.freeDeliveryMinimum
+  };
+}
+
+export function calculateDeliveryFee(subtotal, settings = DEFAULT_DELIVERY_SETTINGS) {
+  const safeSubtotal = Math.max(0, Number(subtotal || 0));
+  if (safeSubtotal === 0) return 0;
+  const normalized = normalizeDeliverySettings(settings);
+  return safeSubtotal >= normalized.freeDeliveryMinimum ? 0 : normalized.deliveryFee;
+}
 
 export function normalizeCategory(category, name = "") {
   const raw = String(category || "")

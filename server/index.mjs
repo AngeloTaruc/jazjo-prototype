@@ -71,6 +71,10 @@ const REWARD_CATALOG = {
 };
 const PRODUCT_IMAGE_BUCKET = "product-images";
 const PRODUCT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const DEFAULT_DELIVERY_SETTINGS = {
+  deliveryFee: 60,
+  freeDeliveryMinimum: 800
+};
 const PRODUCT_IMAGE_ALLOWED_TYPES = new Map([
   ["image/png", "png"],
   ["image/jpeg", "jpg"],
@@ -268,6 +272,44 @@ function normalizeReturnBaseUrl(value){
     return parsed.origin.replace(/\/$/, "");
   }catch{
     return fallback;
+  }
+}
+
+function normalizeDeliverySettings(settings = {}){
+  const deliveryFee = Number(settings.deliveryFee ?? settings.delivery_fee);
+  const freeDeliveryMinimum = Number(settings.freeDeliveryMinimum ?? settings.free_delivery_minimum);
+  return {
+    deliveryFee: Number.isFinite(deliveryFee) && deliveryFee >= 0
+      ? deliveryFee
+      : DEFAULT_DELIVERY_SETTINGS.deliveryFee,
+    freeDeliveryMinimum: Number.isFinite(freeDeliveryMinimum) && freeDeliveryMinimum >= 0
+      ? freeDeliveryMinimum
+      : DEFAULT_DELIVERY_SETTINGS.freeDeliveryMinimum
+  };
+}
+
+function calculateDeliveryFee(subtotal, settings = DEFAULT_DELIVERY_SETTINGS){
+  const safeSubtotal = Math.max(0, Number(subtotal || 0));
+  if(safeSubtotal === 0) return 0;
+  const normalized = normalizeDeliverySettings(settings);
+  return safeSubtotal >= normalized.freeDeliveryMinimum ? 0 : normalized.deliveryFee;
+}
+
+async function getStoreSettings(){
+  try{
+    const rows = await supabaseRequest(
+      "/rest/v1/app_settings?select=key,value&key=in.(delivery_fee,free_delivery_minimum)",
+      { serviceRole: true }
+    );
+    const raw = {};
+    for(const row of rows || []){
+      if(row?.key === "delivery_fee") raw.deliveryFee = row.value;
+      if(row?.key === "free_delivery_minimum") raw.freeDeliveryMinimum = row.value;
+    }
+    return normalizeDeliverySettings(raw);
+  }catch(err){
+    console.warn("[store settings] using defaults:", err.message);
+    return normalizeDeliverySettings();
   }
 }
 
@@ -1843,7 +1885,8 @@ async function createOrder(payload, authProfile){
     });
   }
 
-  const deliveryFee = subtotal >= 800 ? 0 : 60;
+  const storeSettings = await getStoreSettings();
+  const deliveryFee = calculateDeliveryFee(subtotal, storeSettings);
   const redemption = rewardRedemptionId
     ? await getReservedRedemptionForUser(rewardRedemptionId, authProfile.user_id)
     : null;
@@ -2335,10 +2378,17 @@ async function handleApi(req, res, url){
   }
 
   if(req.method === "GET" && url.pathname === "/api/config"){
+    const storeSettings = await getStoreSettings();
     sendJson(res, 200, {
       supabaseUrl: SUPABASE_URL,
-      supabaseAnonKey: SUPABASE_ANON_KEY
+      supabaseAnonKey: SUPABASE_ANON_KEY,
+      storeSettings
     });
+    return true;
+  }
+
+  if(req.method === "GET" && url.pathname === "/api/store-settings"){
+    sendJson(res, 200, { storeSettings: await getStoreSettings() });
     return true;
   }
 
@@ -2743,6 +2793,7 @@ if(!process.env.VERCEL){
 }
 
 export {
+  calculateDeliveryFee,
   PRODUCT_IMAGE_MAX_BYTES,
   buildEmailJsVerificationPayload,
   buildPaymongoOrderLineItems,

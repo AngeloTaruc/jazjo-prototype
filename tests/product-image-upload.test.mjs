@@ -160,6 +160,15 @@ test("buildPaymongoOrderLineItems charges the final order total", () => {
   );
 });
 
+test("calculateDeliveryFee uses store settings with safe defaults", () => {
+  const settings = { deliveryFee: 75, freeDeliveryMinimum: 500 };
+
+  assert.equal(server.calculateDeliveryFee(0, settings), 0);
+  assert.equal(server.calculateDeliveryFee(499, settings), 75);
+  assert.equal(server.calculateDeliveryFee(500, settings), 0);
+  assert.equal(server.calculateDeliveryFee(499, { deliveryFee: -5, freeDeliveryMinimum: "bad" }), 60);
+});
+
 test("parsePaymongoWebhookEvent extracts checkout session payment events", () => {
   const parsed = server.parsePaymongoWebhookEvent({
     data: {

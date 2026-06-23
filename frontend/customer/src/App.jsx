@@ -64,14 +64,17 @@ import {
   apiRedeemReward,
   apiRegister,
   apiRequestRegistrationCode,
+  apiStoreSettings,
   apiVerifyRegistrationCode,
   apiRewards,
   apiSaveProfile,
 } from "./lib/api.js";
 import {
   CART_KEY,
+  DEFAULT_DELIVERY_SETTINGS,
   FAVORITES_KEY,
   ORDERS_KEY,
+  calculateDeliveryFee,
   canAddCartQuantity,
   canAccessPanelRoute,
   canRepayOrder,
@@ -492,6 +495,7 @@ export default function App() {
   );
   const [message, setMessage] = useState("");
   const [loadingProducts, setLoadingProducts] = useState(true);
+  const [deliverySettings, setDeliverySettings] = useState(DEFAULT_DELIVERY_SETTINGS);
   const currentRole = String(localStorage.getItem("jazjo_role") || "").toLowerCase();
   const isPanelRoute = route.startsWith("admin/") || route.startsWith("staff/");
   const isCustomerArea = !["home", "products", "login", "register"].includes(
@@ -531,6 +535,9 @@ export default function App() {
 
   useEffect(() => {
     refreshProducts().catch((err) => setMessage(err.message));
+    apiStoreSettings()
+      .then(setDeliverySettings)
+      .catch((err) => setMessage(err.message));
   }, []);
 
   useEffect(() => {
@@ -781,6 +788,7 @@ export default function App() {
                     products={products}
                     cart={cart}
                     setCart={setCart}
+                    deliverySettings={deliverySettings}
                     refreshOrders={refreshOrders}
                     setMessage={setMessage}
                   />
@@ -1711,7 +1719,7 @@ function Dashboard({
   );
 }
 
-function CartPage({ products, cart, setCart, refreshOrders, setMessage }) {
+function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, setMessage }) {
   const [form, setForm] = useState({
     customerName: "",
     contact: "",
@@ -1734,7 +1742,7 @@ function CartPage({ products, cart, setCart, refreshOrders, setMessage }) {
     })
     .filter(Boolean);
   const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0);
-  const deliveryFee = subtotal >= 800 || subtotal === 0 ? 0 : 60;
+  const deliveryFee = calculateDeliveryFee(subtotal, deliverySettings);
   const total = subtotal + deliveryFee;
 
   const updateQty = (line, delta) => {

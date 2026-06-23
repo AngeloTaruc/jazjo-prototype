@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  calculateDeliveryFee,
   canAddCartQuantity,
   canAccessPanelRoute,
   canRepayOrder,
@@ -64,6 +65,15 @@ test("partitionProductsByFavorites separates saved products without changing ord
   assert.deepEqual(result.favoriteProducts.map((product) => product.id), ["p2", "p3"]);
   assert.deepEqual(result.otherProducts.map((product) => product.id), ["p1", "p4"]);
   assert.deepEqual(products.map((product) => product.id), ["p1", "p2", "p3", "p4"]);
+});
+
+test("calculateDeliveryFee uses configurable fee and free-delivery minimum", () => {
+  const settings = { deliveryFee: 75, freeDeliveryMinimum: 500 };
+
+  assert.equal(calculateDeliveryFee(0, settings), 0);
+  assert.equal(calculateDeliveryFee(499, settings), 75);
+  assert.equal(calculateDeliveryFee(500, settings), 0);
+  assert.equal(calculateDeliveryFee(499, { deliveryFee: -1, freeDeliveryMinimum: "bad" }), 60);
 });
 
 test("statusLabel maps API status keys to customer labels", () => {

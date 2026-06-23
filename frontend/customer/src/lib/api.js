@@ -104,6 +104,15 @@ export async function apiProducts() {
   }));
 }
 
+export async function apiStoreSettings() {
+  const data = await request("/api/store-settings");
+  const settings = data.storeSettings || {};
+  return {
+    deliveryFee: Number(settings.deliveryFee ?? settings.delivery_fee ?? 60),
+    freeDeliveryMinimum: Number(settings.freeDeliveryMinimum ?? settings.free_delivery_minimum ?? 800)
+  };
+}
+
 export async function apiProvinces() {
   const data = await psgcRequest("/provinces/");
   const provinces = normalizePsgcList(data);
