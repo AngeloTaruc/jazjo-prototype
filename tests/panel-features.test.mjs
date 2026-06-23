@@ -28,3 +28,10 @@ test("admin report export buttons have PDF and Excel actions", () => {
   assert.match(adminSource, /openPrintableReport/);
   assert.match(adminSource, /download = `jazjo-reports-/);
 });
+
+test("admin sales chart renders visible values and bar tracks", () => {
+  assert.match(adminSource, /Sales Trend/);
+  assert.match(adminSource, /money\(p\.sales\)/);
+  assert.match(adminSource, /chart-bar-track/);
+  assert.match(adminSource, /aria-label=\{`\$\{p\.label\} sales/);
+});

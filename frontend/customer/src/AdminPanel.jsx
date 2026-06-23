@@ -316,6 +316,7 @@ function AdminSalesPage({ setMessage }) {
   const kpis = data?.kpis || {};
   const chart = data?.chart || {};
   const rows = data?.rows || [];
+  const maxChartSales = Math.max(...(chart.points || []).map((x) => Number(x.sales || 0)), 1);
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="grid gap-4 sm:grid-cols-5">
@@ -329,14 +330,17 @@ function AdminSalesPage({ setMessage }) {
         <Card>
           <CardHeader><h2 className="text-lg font-black">{chart.title || "Sales Trend"}</h2></CardHeader>
           <CardBody>
-            <div className="flex items-end gap-2" style={{ height: 160 }}>
+            <div className="grid min-h-56 grid-cols-7 items-end gap-3 rounded-xl border border-white/10 bg-slate-950/40 p-4">
               {chart.points.map((p, idx) => {
-                const max = Math.max(...chart.points.map((x) => x.sales), 1);
-                const h = (p.sales / max) * 100;
+                const sales = Number(p.sales || 0);
+                const h = sales > 0 ? Math.max((sales / maxChartSales) * 100, 12) : 4;
                 return (
                   <Tooltip key={p.key || idx} content={`${p.label}: ${money(p.sales)}`} placement="top" showArrow>
-                    <div className="flex flex-1 flex-col items-center gap-1">
-                      <div className="w-full rounded-t-md bg-emerald-500/60 transition-all hover:bg-emerald-400" style={{ height: `${Math.max(h, 4)}%` }} />
+                    <div className="flex h-44 min-w-0 flex-col items-center justify-end gap-2" aria-label={`${p.label} sales ${money(sales)}`}>
+                      <span className="w-full truncate text-center text-[10px] font-semibold text-emerald-200">{money(sales)}</span>
+                      <div className="chart-bar-track flex h-32 w-full items-end overflow-hidden rounded-t-lg bg-white/[.04]">
+                        <div className="w-full rounded-t-lg bg-emerald-400 shadow-lg shadow-emerald-950/30 transition-all hover:bg-emerald-300" style={{ height: `${h}%` }} />
+                      </div>
                       <span className="text-[10px] text-slate-500">{p.label}</span>
                     </div>
                   </Tooltip>
