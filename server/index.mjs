@@ -2060,6 +2060,91 @@ async function updateOrderStatus(orderCode, nextStatusInput, actorProfile){
   return updated;
 }
 
+async function updateOrderDetails(orderCode, payload, actorProfile){
+  const rows = await supabaseRequest(
+    `/rest/v1/orders?select=id,order_code,user_id,status,customer_name,contact,address,subtotal,delivery_fee,total,discount_amount&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`,
+    { serviceRole: true }
+  );
+  const order = rows?.[0];
+  if(!order) throw new Error("Order not found.");
+
+  const body = {};
+  const customerName = String(payload.customerName ?? payload.customer_name ?? "").trim();
+  if(customerName) body.customer_name = customerName;
+  if(payload.contact !== undefined){
+    body.contact = validatePhilippineContact(payload.contact);
+  }
+  const address = String(payload.address || "").trim();
+  if(address) body.address = address;
+  const nextStatusInput = payload.status || "";
+  const nextStatus = nextStatusInput ? uiStatusToDbStatus(nextStatusInput) : "";
+  if(nextStatusInput && !nextStatus) throw new Error("Invalid status.");
+  if(nextStatus) body.status = nextStatus;
+
+  const items = Array.isArray(payload.items) ? payload.items : null;
+  if(items){
+    const currentItems = await supabaseRequest(
+      `/rest/v1/order_items?select=id,sku,name,unit_price,qty,line_total&order_id=eq.${order.id}`,
+      { serviceRole: true }
+    );
+    const currentBySku = new Map((currentItems || []).map((item) => [String(item.sku || ""), item]));
+    let subtotal = 0;
+    for(const item of items){
+      const sku = String(item.productId || item.sku || "").trim();
+      const current = currentBySku.get(sku);
+      if(!current) throw new Error(`Order item ${sku || "unknown"} was not found.`);
+      const qty = Number(item.qty || 0);
+      if(!Number.isFinite(qty) || qty < 0) throw new Error("Order item quantity must be zero or higher.");
+      if(qty === 0){
+        await supabaseRequest(`/rest/v1/order_items?id=eq.${current.id}`, {
+          method: "DELETE",
+          serviceRole: true
+        });
+        continue;
+      }
+      const lineTotal = Number(current.unit_price || 0) * qty;
+      subtotal += lineTotal;
+      await supabaseRequest(`/rest/v1/order_items?id=eq.${current.id}`, {
+        method: "PATCH",
+        serviceRole: true,
+        headers: { Prefer: "return=minimal" },
+        body: { qty, line_total: lineTotal }
+      });
+    }
+    const settings = await getStoreSettings();
+    const deliveryFee = calculateDeliveryFee(subtotal, settings);
+    const discountAmount = Number(order.discount_amount || 0);
+    body.subtotal = subtotal;
+    body.delivery_fee = deliveryFee;
+    body.total = Math.max(0, Number((subtotal + deliveryFee - discountAmount).toFixed(2)));
+  }
+
+  if(!Object.keys(body).length){
+    throw new Error("No editable fields provided.");
+  }
+
+  const updatedRows = await supabaseRequest(`/rest/v1/orders?id=eq.${order.id}`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=representation" },
+    body
+  });
+
+  await supabaseRequest("/rest/v1/order_status_events", {
+    method: "POST",
+    serviceRole: true,
+    headers: { Prefer: "return=minimal" },
+    body: [{
+      order_id: order.id,
+      status: body.status || order.status,
+      note: `Order details updated by ${actorProfile.role}.`,
+      changed_by: actorProfile.user_id
+    }]
+  });
+
+  return updatedRows?.[0] || order;
+}
+
 async function repayOrder(orderCode, authProfile, payload = {}){
   const rows = await supabaseRequest(
     `/rest/v1/orders?select=id,order_code,user_id,total,status,payment_status,payment_method&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`,
@@ -2606,6 +2691,16 @@ async function handleApi(req, res, url){
     const payload = await readJson(req);
     const result = await createOrder(payload, auth.profile);
     sendJson(res, 201, result);
+    return true;
+  }
+
+  if(req.method === "PATCH" && url.pathname.startsWith("/api/orders/") && url.pathname.endsWith("/details")){
+    const auth = await requireAuth(req, ["admin", "staff"]);
+    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace("/details", ""));
+    const payload = await readJson(req);
+    await updateOrderDetails(orderCode, payload, auth.profile);
+    const refreshed = await getOrderForUserId(orderCode, (await supabaseRequest(`/rest/v1/orders?select=user_id&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`, { serviceRole: true }))?.[0]?.user_id);
+    sendJson(res, 200, { ok: true, order: refreshed });
     return true;
   }
 

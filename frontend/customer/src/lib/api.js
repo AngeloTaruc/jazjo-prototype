@@ -225,6 +225,14 @@ export async function apiUpdateOrderStatus(orderCode, status) {
   });
 }
 
+export async function apiUpdateOrderDetails(orderCode, payload) {
+  const data = await request(`/api/orders/${encodeURIComponent(orderCode)}/details`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+  return data.order ? normalizeOrder(data.order) : null;
+}
+
 export async function apiAdminDashboard() {
   return request("/api/panel/admin/dashboard");
 }

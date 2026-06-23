@@ -28,6 +28,67 @@ export function calculateDeliveryFee(subtotal, settings = DEFAULT_DELIVERY_SETTI
   return safeSubtotal >= normalized.freeDeliveryMinimum ? 0 : normalized.deliveryFee;
 }
 
+function dateKey(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
+  return date.toISOString().slice(0, 10);
+}
+
+export function createDemandForecast(products = [], orders = [], { horizonDays = 5 } = {}) {
+  const quantitiesByName = new Map();
+  for (const order of orders || []) {
+    if (statusLabel(order?.status) === "Cancelled") continue;
+    const day = dateKey(order?.createdAtRaw || order?.createdAt || order?.created_at);
+    for (const item of order?.items || []) {
+      const name = String(item?.name || "").trim();
+      if (!name) continue;
+      const productDays = quantitiesByName.get(name) || new Map();
+      productDays.set(day, (productDays.get(day) || 0) + Number(item?.qty || 0));
+      quantitiesByName.set(name, productDays);
+    }
+  }
+
+  return (products || [])
+    .map((product) => {
+      const name = String(product?.name || "").trim();
+      const dayTotals = [...(quantitiesByName.get(name) || new Map()).entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map((entry) => Number(entry[1] || 0));
+      const recent = dayTotals.slice(-7);
+      const total = recent.reduce((sum, qty) => sum + qty, 0);
+      const average = recent.length ? total / recent.length : 0;
+      const first = recent[0] || 0;
+      const last = recent[recent.length - 1] || first;
+      const trend = recent.length > 1 ? (last - first) / (recent.length - 1) : 0;
+      const dailyDemand = Math.max(0, average + trend);
+      const forecastCases = Math.ceil(dailyDemand * Number(horizonDays || 5));
+      const stockCases = Number(product?.stockCases ?? product?.stock_cases ?? 0);
+      return {
+        name,
+        category: product?.category || "-",
+        stockCases,
+        forecastCases,
+        recommendedRestock: Math.max(0, forecastCases - stockCases),
+        model: recent.length >= 2 ? "ARIMA-style trend" : "Moving average"
+      };
+    })
+    .filter((row) => row.name)
+    .sort((a, b) => b.recommendedRestock - a.recommendedRestock || b.forecastCases - a.forecastCases);
+}
+
+function csvEscape(value) {
+  return `"${String(value ?? "").replace(/"/g, "")}"`;
+}
+
+export function buildCsvContent(headers = [], rows = [], fieldLabels = {}) {
+  const fields = Object.keys(fieldLabels);
+  const headerLine = headers.map(csvEscape).join(",");
+  const bodyLines = rows.map((row) =>
+    fields.map((field) => csvEscape(row?.[field])).join(",")
+  );
+  return [headerLine, ...bodyLines].join("\r\n");
+}
+
 export function normalizeCategory(category, name = "") {
   const raw = String(category || "")
     .trim()

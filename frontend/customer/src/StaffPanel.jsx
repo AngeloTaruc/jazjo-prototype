@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@heroui/react/button";
 import { Card } from "@heroui/react/card";
 import { Chip } from "@heroui/react/chip";
+import { Input as HeroInput } from "@heroui/react/input";
+import { Modal } from "@heroui/react/modal";
 import { Pagination } from "@heroui/react/pagination";
 import { Skeleton } from "@heroui/react/skeleton";
 import { Tabs } from "@heroui/react/tabs";
@@ -17,15 +19,18 @@ import {
   Truck,
   Warehouse,
   RefreshCw,
+  Eye,
+  Save,
 } from "lucide-react";
 import {
   apiStaffOrders,
   apiStaffInventory,
   apiStaffDelivery,
   apiUpdateOrderStatus,
+  apiUpdateOrderDetails,
   apiAdminDashboard
 } from "./lib/api.js";
-import { clearSession, formatQty, getToken, money, statusLabel } from "./lib/customerLogic.js";
+import { clearSession, createDemandForecast, formatQty, getToken, money, statusLabel } from "./lib/customerLogic.js";
 
 const CardHeader = Card.Header;
 const CardBody = Card.Content;
@@ -286,8 +291,12 @@ function StaffOrdersPage({ setMessage }) {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("All");
   const [page, setPage] = useState(1);
+  const [editingOrder, setEditingOrder] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
   const perPage = 10;
   const statuses = ["All", "Pending Payment", "Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered", "Cancelled"];
+  const editableStatuses = statuses.filter((status) => status !== "All");
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -326,6 +335,44 @@ function StaffOrdersPage({ setMessage }) {
       "Out for Delivery": "Delivered"
     };
     return map[label] || null;
+  };
+  const openEditOrder = (order) => {
+    setEditingOrder(order);
+    setEditForm({
+      customerName: order.customerName || "",
+      contact: order.contact || "",
+      address: order.address || "",
+      status: statusLabel(order.status),
+      items: (order.items || []).map((item) => ({
+        productId: item.productId,
+        name: item.name,
+        price: Number(item.price || 0),
+        qty: Number(item.qty || 0)
+      }))
+    });
+  };
+  const updateEditItemQty = (idx, value) => {
+    setEditForm((current) => ({
+      ...current,
+      items: (current.items || []).map((item, itemIdx) =>
+        itemIdx === idx ? { ...item, qty: Math.max(0, Number(value || 0)) } : item
+      )
+    }));
+  };
+  const saveOrderEdit = async () => {
+    if (!editingOrder || !editForm) return;
+    setSavingEdit(true);
+    try {
+      await apiUpdateOrderDetails(editingOrder.id, editForm);
+      setMessage(`Order ${editingOrder.id} updated.`);
+      setEditingOrder(null);
+      setEditForm(null);
+      await load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setSavingEdit(false);
+    }
   };
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
@@ -367,11 +414,17 @@ function StaffOrdersPage({ setMessage }) {
                         </div>
                       </Td>
                       <Td>
-                        {next ? (
-                          <Button size="sm" color="warning" variant="flat" onPress={() => updateStatus(order.id, next)}>
-                            {next}
+                        <div className="flex flex-wrap gap-2">
+                          {next ? (
+                            <Button size="sm" color="warning" variant="flat" onPress={() => updateStatus(order.id, next)}>
+                              {next}
+                            </Button>
+                          ) : null}
+                          <Button size="sm" variant="flat" onPress={() => openEditOrder(order)}>
+                            <Eye size={14} />
+                            Edit
                           </Button>
-                        ) : null}
+                        </div>
                       </Td>
                     </Tr>
                   );
@@ -386,12 +439,87 @@ function StaffOrdersPage({ setMessage }) {
           ) : null}
         </>
       )}
+      <Modal isOpen={!!editingOrder} onOpenChange={() => { setEditingOrder(null); setEditForm(null); }}>
+        <Modal.Backdrop>
+          <Modal.Container size="2xl">
+            <Modal.Dialog>
+              <Modal.Header>
+                <div>
+                  <p className="text-xs font-bold uppercase text-amber-300">Edit Order</p>
+                  <h2 className="text-lg font-black text-white">{editingOrder?.id}</h2>
+                </div>
+              </Modal.Header>
+              <Modal.Body className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <HeroInput
+                    label="Customer Name"
+                    value={editForm?.customerName || ""}
+                    onValueChange={(value) => setEditForm((current) => ({ ...current, customerName: value }))}
+                  />
+                  <HeroInput
+                    label="Contact"
+                    value={editForm?.contact || ""}
+                    onValueChange={(value) => setEditForm((current) => ({ ...current, contact: value }))}
+                  />
+                </div>
+                <label className="grid gap-2 text-sm font-semibold text-slate-200">
+                  Status
+                  <select
+                    className="rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
+                    value={editForm?.status || "Order Placed"}
+                    onChange={(event) => setEditForm((current) => ({ ...current, status: event.target.value }))}
+                  >
+                    {editableStatuses.map((status) => <option key={status}>{status}</option>)}
+                  </select>
+                </label>
+                <label className="grid gap-2 text-sm font-semibold text-slate-200">
+                  Delivery Address
+                  <textarea
+                    className="min-h-24 rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
+                    value={editForm?.address || ""}
+                    onChange={(event) => setEditForm((current) => ({ ...current, address: event.target.value }))}
+                  />
+                </label>
+                <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                  <p className="mb-3 text-xs font-bold uppercase text-slate-500">Items</p>
+                  <div className="grid gap-2">
+                    {(editForm?.items || []).map((item, idx) => (
+                      <div key={`${item.productId || item.name}-${idx}`} className="grid gap-2 rounded-lg border border-white/10 bg-slate-950/60 p-2 sm:grid-cols-[1fr_110px_120px] sm:items-center">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-white">{item.name}</p>
+                          <p className="text-xs text-slate-500">{money(item.price)} per case</p>
+                        </div>
+                        <HeroInput
+                          label="Qty"
+                          type="number"
+                          min="0"
+                          value={String(item.qty)}
+                          onValueChange={(value) => updateEditItemQty(idx, value)}
+                        />
+                        <p className="text-sm font-semibold text-white">{money(Number(item.price || 0) * Number(item.qty || 0))}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => { setEditingOrder(null); setEditForm(null); }}>Cancel</Button>
+                <Button color="warning" isLoading={savingEdit} onPress={saveOrderEdit}>
+                  <Save size={16} />
+                  Save Changes
+                </Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </motion.div>
   );
 }
 
 function StaffInventoryPage({ setMessage }) {
   const [inventory, setInventory] = useState([]);
+  const [forecastRows, setForecastRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("All");
   const [page, setPage] = useState(1);
@@ -399,8 +527,9 @@ function StaffInventoryPage({ setMessage }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await apiStaffInventory();
+      const [result, ordersResult] = await Promise.all([apiStaffInventory(), apiStaffOrders()]);
       setInventory(result.inventory || []);
+      setForecastRows(createDemandForecast(result.inventory || [], ordersResult.orders || [], { horizonDays: 5 }).slice(0, 5));
     } catch (err) {
       setMessage(err.message);
     } finally {
@@ -425,6 +554,30 @@ function StaffInventoryPage({ setMessage }) {
         <h2 className="text-lg font-black">Inventory View</h2>
         <Button size="sm" variant="flat" startContent={<RefreshCw size={14} />} onPress={load}>Refresh</Button>
       </div>
+      <Card>
+        <CardHeader><h2 className="text-lg font-black">ARIMA Forecast Summary</h2></CardHeader>
+        <CardBody className="space-y-3">
+          <p className="text-xs text-slate-500">Next 5 days demand forecast from order history and recent demand trend.</p>
+          {forecastRows.length ? (
+            <div className="grid gap-2">
+              {forecastRows.map((row) => (
+                <div key={row.name} className="grid gap-2 rounded-xl border border-white/10 bg-white/[.03] p-3 sm:grid-cols-[1fr_auto_auto] sm:items-center">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-white">{row.name}</p>
+                    <p className="text-xs text-slate-500">{row.model}</p>
+                  </div>
+                  <Chip color="warning" variant="flat" size="sm">{formatQty(row.forecastCases)} forecast</Chip>
+                  <Chip color={row.recommendedRestock > 0 ? "warning" : "default"} variant="flat" size="sm">
+                    Restock {formatQty(row.recommendedRestock)}
+                  </Chip>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400">No order history yet for forecasting.</p>
+          )}
+        </CardBody>
+      </Card>
       <Tabs selectedKey={filter} onSelectionChange={(key) => setFilter(String(key))} color="warning" variant="underlined" size="sm">
         <Tabs.List className="gap-0 overflow-x-auto border-b border-white/10">
           {["All", "In Stock", "Low Stock", "Out of Stock"].map((s) => (

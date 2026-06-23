@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildCsvContent,
   calculateDeliveryFee,
   canAddCartQuantity,
   canAccessPanelRoute,
+  createDemandForecast,
   canRepayOrder,
   formatCountdown,
   isRetryablePaymentReason,
@@ -74,6 +76,35 @@ test("calculateDeliveryFee uses configurable fee and free-delivery minimum", () 
   assert.equal(calculateDeliveryFee(499, settings), 75);
   assert.equal(calculateDeliveryFee(500, settings), 0);
   assert.equal(calculateDeliveryFee(499, { deliveryFee: -1, freeDeliveryMinimum: "bad" }), 60);
+});
+
+test("createDemandForecast ranks products by trend-adjusted demand", () => {
+  const products = [
+    { name: "C2 Lemon", stockCases: 4 },
+    { name: "Water 500ml", stockCases: 20 }
+  ];
+  const orders = [
+    { createdAtRaw: "2026-06-20T08:00:00Z", items: [{ name: "C2 Lemon", qty: 2 }, { name: "Water 500ml", qty: 1 }] },
+    { createdAtRaw: "2026-06-21T08:00:00Z", items: [{ name: "C2 Lemon", qty: 4 }] },
+    { createdAtRaw: "2026-06-22T08:00:00Z", items: [{ name: "C2 Lemon", qty: 6 }] }
+  ];
+
+  const forecast = createDemandForecast(products, orders, { horizonDays: 5 });
+
+  assert.equal(forecast[0].name, "C2 Lemon");
+  assert.equal(forecast[0].forecastCases, 30);
+  assert.equal(forecast[0].recommendedRestock, 26);
+  assert.equal(forecast[0].model, "ARIMA-style trend");
+});
+
+test("buildCsvContent escapes report values for Excel-compatible export", () => {
+  const csv = buildCsvContent(
+    ["Report Type", "Coverage"],
+    [{ reportType: "Sales, Report", coverage: "10 orders \"total\"" }],
+    { reportType: "Report Type", coverage: "Coverage" }
+  );
+
+  assert.equal(csv, "\"Report Type\",\"Coverage\"\r\n\"Sales, Report\",\"10 orders total\"");
 });
 
 test("statusLabel maps API status keys to customer labels", () => {

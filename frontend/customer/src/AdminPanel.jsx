@@ -53,7 +53,7 @@ import {
   apiAdminRedeemReward,
   apiUpdateOrderStatus
 } from "./lib/api.js";
-import { clearSession, formatQty, getToken, money, statusLabel } from "./lib/customerLogic.js";
+import { buildCsvContent, clearSession, createDemandForecast, formatQty, getToken, money, statusLabel } from "./lib/customerLogic.js";
 
 const CardHeader = Card.Header;
 const CardBody = Card.Content;
@@ -619,6 +619,7 @@ function AdminInventoryPage({ setMessage }) {
   const [inventory, setInventory] = useState([]);
   const [lowStock, setLowStock] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [forecastRows, setForecastRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -639,10 +640,11 @@ function AdminInventoryPage({ setMessage }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await apiAdminInventory();
+      const [result, ordersResult] = await Promise.all([apiAdminInventory(), apiAdminOrders()]);
       setInventory(result.inventory || []);
       setLowStock(result.lowStock || []);
       setCategories(result.categories || []);
+      setForecastRows(createDemandForecast(result.inventory || [], ordersResult.orders || [], { horizonDays: 5 }).slice(0, 5));
     } catch (err) {
       setMessage(err.message);
     } finally {
@@ -951,15 +953,27 @@ function AdminInventoryPage({ setMessage }) {
       )}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader><h2 className="text-lg font-black">Forecast Summary</h2></CardHeader>
+          <CardHeader><h2 className="text-lg font-black">ARIMA Forecast Summary</h2></CardHeader>
           <CardBody className="space-y-3">
-            <p className="text-xs text-slate-500">Forecast helps estimate stock needs based on past sales trends.</p>
-            <div className="rounded-xl border border-white/10 bg-white/[.02] p-4">
-              <p className="text-sm font-semibold text-emerald-300">Sample: next 5 days demand estimate</p>
-              <p className="mt-2 text-xs text-slate-500">
-                Coming soon &mdash; forecast will pull from order history to recommend restock quantities per product.
-              </p>
-            </div>
+            <p className="text-xs text-slate-500">Next 5 days demand forecast from order history and recent demand trend.</p>
+            {forecastRows.length ? (
+              <div className="grid gap-2">
+                {forecastRows.map((row) => (
+                  <div key={row.name} className="grid gap-2 rounded-xl border border-white/10 bg-white/[.03] p-3 sm:grid-cols-[1fr_auto_auto] sm:items-center">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-white">{row.name}</p>
+                      <p className="text-xs text-slate-500">{row.model}</p>
+                    </div>
+                    <Chip color="success" variant="flat" size="sm">{formatQty(row.forecastCases)} forecast</Chip>
+                    <Chip color={row.recommendedRestock > 0 ? "warning" : "default"} variant="flat" size="sm">
+                      Restock {formatQty(row.recommendedRestock)}
+                    </Chip>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">No order history yet for forecasting.</p>
+            )}
           </CardBody>
         </Card>
         <Card>
@@ -1423,12 +1437,63 @@ function AdminReportsPage({ setMessage }) {
     }
   }, []);
   useEffect(() => { load(); }, [load]);
+  const reportFields = { reportType: "Report Type", coverage: "Coverage", status: "Status" };
+  const exportExcel = () => {
+    const csv = buildCsvContent(Object.values(reportFields), reports, reportFields);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `jazjo-reports-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setMessage("Excel export downloaded.");
+  };
+  const openPrintableReport = (autoPrint = true) => {
+    const rows = reports.map((report) => `
+      <tr>
+        <td>${String(report.reportType || "")}</td>
+        <td>${String(report.coverage || "")}</td>
+        <td>${String(report.status || "")}</td>
+      </tr>
+    `).join("");
+    const popup = window.open("", "_blank", "noopener,noreferrer");
+    if (!popup) {
+      setMessage("Allow popups to export PDF.");
+      return;
+    }
+    popup.document.write(`
+      <html>
+        <head>
+          <title>Jazjo Reports</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 32px; color: #111827; }
+            h1 { margin: 0 0 8px; }
+            p { color: #475569; }
+            table { width: 100%; border-collapse: collapse; margin-top: 24px; }
+            th, td { border: 1px solid #cbd5e1; padding: 10px; text-align: left; }
+            th { background: #f1f5f9; }
+          </style>
+        </head>
+        <body>
+          <h1>Jazjo Reports</h1>
+          <p>Generated ${new Date().toLocaleString()}</p>
+          <table>
+            <thead><tr><th>Report Type</th><th>Coverage</th><th>Status</th></tr></thead>
+            <tbody>${rows || "<tr><td colspan=\"3\">No reports available.</td></tr>"}</tbody>
+          </table>
+        </body>
+      </html>
+    `);
+    popup.document.close();
+    if (autoPrint) popup.print();
+  };
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="flex flex-wrap gap-3">
-        <Button variant="flat" startContent={<BarChart3 size={14} />}>PDF Export</Button>
-        <Button variant="flat" startContent={<BarChart3 size={14} />}>Excel Export</Button>
-        <Button variant="flat" startContent={<BarChart3 size={14} />}>Print</Button>
+        <Button variant="flat" startContent={<BarChart3 size={14} />} onPress={() => openPrintableReport(true)}>PDF Export</Button>
+        <Button variant="flat" startContent={<BarChart3 size={14} />} onPress={exportExcel}>Excel Export</Button>
+        <Button variant="flat" startContent={<BarChart3 size={14} />} onPress={() => openPrintableReport(true)}>Print</Button>
       </div>
       <Card>
         <CardHeader><h2 className="text-lg font-black">Reports</h2></CardHeader>
