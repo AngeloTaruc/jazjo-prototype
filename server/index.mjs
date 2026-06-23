@@ -1615,6 +1615,15 @@ function toCentavos(amount){
   return Math.round(Number(amount || 0) * 100);
 }
 
+function buildPaymongoOrderLineItems({ orderCode, total }){
+  return [{
+    currency: "PHP",
+    amount: toCentavos(total),
+    name: `Order ${orderCode}`,
+    quantity: 1
+  }];
+}
+
 function isQrphMethod(method){
   return String(method || "").toUpperCase().includes("QRPH");
 }
@@ -1932,12 +1941,10 @@ async function createOrder(payload, authProfile){
   if(useQrph){
     const checkout = await paymongoCreateCheckoutSession({
       orderCode: order.order_code,
-      lineItems: itemRows.map((it) => ({
-        currency: "PHP",
-        amount: toCentavos(it.line_total),
-        name: it.name,
-        quantity: 1
-      })),
+      lineItems: buildPaymongoOrderLineItems({
+        orderCode: order.order_code,
+        total
+      }),
       successUrl: `${returnBaseUrl}/customer-app/?paid=${encodeURIComponent(order.order_code)}#/orders`,
       cancelUrl: `${returnBaseUrl}/customer-app/?cancelled=${encodeURIComponent(order.order_code)}#/cart`
     });
@@ -2031,12 +2038,10 @@ async function repayOrder(orderCode, authProfile, payload = {}){
   const returnBaseUrl = normalizeReturnBaseUrl(payload.returnBaseUrl || payload.return_base_url || APP_BASE_URL);
   const checkout = await paymongoCreateCheckoutSession({
     orderCode: order.order_code,
-    lineItems: [{
-      currency: "PHP",
-      amount: toCentavos(total),
-      name: `Order ${order.order_code}`,
-      quantity: 1
-    }],
+    lineItems: buildPaymongoOrderLineItems({
+      orderCode: order.order_code,
+      total
+    }),
     successUrl: `${returnBaseUrl}/customer-app/?paid=${encodeURIComponent(order.order_code)}#/orders`,
     cancelUrl: `${returnBaseUrl}/customer-app/?cancelled=${encodeURIComponent(order.order_code)}#/orders`
   });
@@ -2240,13 +2245,15 @@ function paymongoCheckoutLooksPaid(checkout){
     ? attrs.payment_intent.attributes.payments
     : [];
   const payments = [...checkoutPayments, ...intentPayments];
-  const paidPayment = payments.find(p => String(p?.attributes?.status || "").toLowerCase() === "paid");
+  const paidStatuses = new Set(["paid", "succeeded"]);
+  const paidPayment = payments.find(p => paidStatuses.has(String(p?.attributes?.status || p?.status || "").toLowerCase()));
   const intentStatus = String(attrs.payment_intent?.attributes?.status || "").toLowerCase();
+  const checkoutStatus = String(attrs.status || "").toLowerCase();
   return {
-    paid: Boolean(paidPayment) || intentStatus === "succeeded",
+    paid: Boolean(paidPayment) || paidStatuses.has(intentStatus) || paidStatuses.has(checkoutStatus),
     paymentId: paidPayment?.id || null,
     intentStatus,
-    checkoutStatus: String(attrs.status || "").toLowerCase()
+    checkoutStatus
   };
 }
 
@@ -2738,10 +2745,12 @@ if(!process.env.VERCEL){
 export {
   PRODUCT_IMAGE_MAX_BYTES,
   buildEmailJsVerificationPayload,
+  buildPaymongoOrderLineItems,
   getPsgcCitiesPath,
   handleRequest,
   isPaymongoProcessingStatusError,
   normalizeReturnBaseUrl,
+  paymongoCheckoutLooksPaid,
   parsePaymongoWebhookEvent,
   parseProductImagePayload,
   validateCustomerRegistration,

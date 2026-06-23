@@ -153,6 +153,13 @@ test("isPaymongoProcessingStatusError detects asynchronous source state", () => 
   assert.equal(server.isPaymongoProcessingStatusError(new Error("Invalid token")), false);
 });
 
+test("buildPaymongoOrderLineItems charges the final order total", () => {
+  assert.deepEqual(
+    server.buildPaymongoOrderLineItems({ orderCode: "ORD-001", total: 61 }),
+    [{ currency: "PHP", amount: 6100, name: "Order ORD-001", quantity: 1 }]
+  );
+});
+
 test("parsePaymongoWebhookEvent extracts checkout session payment events", () => {
   const parsed = server.parsePaymongoWebhookEvent({
     data: {
@@ -198,4 +205,28 @@ test("parsePaymongoWebhookEvent does not treat payment id as checkout session id
   assert.equal(parsed.orderCode, "ORD-20260619-002");
   assert.equal(parsed.checkoutSessionId, null);
   assert.equal(parsed.paymentId, "pay_456");
+});
+
+test("paymongoCheckoutLooksPaid accepts paid checkout and intent statuses", () => {
+  assert.equal(
+    server.paymongoCheckoutLooksPaid({
+      attributes: {
+        status: "paid"
+      }
+    }).paid,
+    true
+  );
+
+  assert.equal(
+    server.paymongoCheckoutLooksPaid({
+      attributes: {
+        payment_intent: {
+          attributes: {
+            status: "paid"
+          }
+        }
+      }
+    }).paid,
+    true
+  );
 });
