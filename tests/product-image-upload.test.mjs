@@ -216,6 +216,32 @@ test("parsePaymongoWebhookEvent does not treat payment id as checkout session id
   assert.equal(parsed.paymentId, "pay_456");
 });
 
+test("parsePaymongoWebhookEvent extracts nested checkout session from payment events", () => {
+  const parsed = server.parsePaymongoWebhookEvent({
+    data: {
+      id: "evt_789",
+      attributes: {
+        type: "payment.paid",
+        data: {
+          id: "pay_789",
+          attributes: {
+            status: "paid",
+            checkout_session: {
+              id: "cs_789",
+              metadata: { order_code: "ORD-20260623-001" }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  assert.equal(parsed.eventType, "payment.paid");
+  assert.equal(parsed.orderCode, "ORD-20260623-001");
+  assert.equal(parsed.checkoutSessionId, "cs_789");
+  assert.equal(parsed.paymentId, "pay_789");
+});
+
 test("paymongoCheckoutLooksPaid accepts paid checkout and intent statuses", () => {
   assert.equal(
     server.paymongoCheckoutLooksPaid({

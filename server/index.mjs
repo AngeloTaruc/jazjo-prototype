@@ -1751,11 +1751,24 @@ function parsePaymongoWebhookEvent(event){
   const resource = event?.data?.attributes?.data || event?.data?.attributes?.resource || event?.resource || {};
   const resourceId = resource?.id || null;
   const resourceAttr = resource?.attributes || {};
+  const checkoutSession =
+    resourceAttr?.checkout_session ||
+    resourceAttr?.checkout ||
+    resourceAttr?.source?.checkout_session ||
+    resourceAttr?.payment_intent?.attributes?.checkout_session ||
+    {};
   const metadata =
     resourceAttr?.metadata ||
-    resourceAttr?.checkout_session?.metadata ||
-    resourceAttr?.checkout?.metadata ||
+    checkoutSession?.metadata ||
+    checkoutSession?.attributes?.metadata ||
     {};
+  const checkoutSessionId =
+    (eventType === "checkout_session.payment.paid" ? resourceId : null) ||
+    checkoutSession?.id ||
+    checkoutSession?.attributes?.id ||
+    resourceAttr?.checkout_session_id ||
+    resourceAttr?.checkoutSessionId ||
+    null;
   const firstPayment =
     (Array.isArray(resourceAttr?.payments) && resourceAttr.payments[0]) ||
     (Array.isArray(resourceAttr?.payment_intent?.attributes?.payments) && resourceAttr.payment_intent.attributes.payments[0]) ||
@@ -1766,7 +1779,7 @@ function parsePaymongoWebhookEvent(event){
     eventType,
     resourceId,
     orderCode: metadata?.order_code || null,
-    checkoutSessionId: eventType === "checkout_session.payment.paid" ? resourceId : null,
+    checkoutSessionId,
     paymentId:
       firstPayment?.id ||
       firstPayment?.attributes?.id ||
@@ -2414,6 +2427,7 @@ async function handleApi(req, res, url){
       eventId,
       eventType,
       resourceId,
+      checkoutSessionId,
       orderCode,
       paymentId
     });
