@@ -111,10 +111,20 @@ export function normalizeCategory(category, name = "") {
 
 export function validateContact(contact) {
   const value = String(contact || "").trim();
-  if (!/^09\d{9}$/.test(value)) {
-    return { ok: false, message: "Contact number must follow Philippine format: 09xxxxxxxxx." };
+  if (!/^\d*$/.test(value)) {
+    return { ok: false, message: "Only numeric characters are allowed for contact number." };
+  }
+  if (value && !"09".startsWith(value) && !value.startsWith("09")) {
+    return { ok: false, message: "Contact number must start with 09." };
+  }
+  if (value.length !== 11) {
+    return { ok: false, message: "Contact number must contain exactly 11 digits." };
   }
   return { ok: true, value };
+}
+
+export function normalizeContactInput(contact) {
+  return String(contact || "").replace(/\D/g, "").slice(0, 11);
 }
 
 export function validateGmailAddress(email) {
@@ -128,11 +138,50 @@ export function validateGmailAddress(email) {
 
 export function validatePassword(password) {
   const value = String(password || "");
-  if (value.length !== 8) return { ok: false, message: "Password must be exactly 8 characters." };
+  if (value.length < 8) return { ok: false, message: "Password must be at least 8 characters." };
   if (!/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9]/.test(value)) {
     return { ok: false, message: "Password must include uppercase, lowercase, number, and special character." };
   }
   return { ok: true, value };
+}
+
+export function buildCheckoutPrefill(data = {}) {
+  const profile = data.profile || data.user || data;
+  const rawAddress = profile.address || "";
+  const addressText = rawAddress && typeof rawAddress === "object"
+    ? String(rawAddress.fullAddress || rawAddress.full_address || rawAddress.address || "").trim()
+    : String(rawAddress || "").trim();
+  return {
+    customerName: String(profile.full_name || profile.fullName || "").trim(),
+    email: String(profile.email || "").trim(),
+    contact: String(profile.contact || "").trim(),
+    addressText
+  };
+}
+
+export function mergeOrdersByOrderNumber(orders = []) {
+  const byOrder = new Map();
+  for (const order of orders || []) {
+    const id = String(order?.id || order?.order_code || "").trim();
+    if (!id) continue;
+    const existing = byOrder.get(id);
+    if (!existing) {
+      byOrder.set(id, {
+        ...order,
+        id,
+        items: [...(order.items || [])],
+        total: Number(order.total || 0)
+      });
+      continue;
+    }
+    existing.items = [...(existing.items || []), ...(order.items || [])];
+    existing.total = Number(existing.total || 0) + Number(order.total || 0);
+    existing.status = order.status || existing.status;
+    existing.paymentStatus = order.paymentStatus || existing.paymentStatus;
+    existing.createdAt = existing.createdAt || order.createdAt;
+    existing.customerName = existing.customerName || order.customerName;
+  }
+  return [...byOrder.values()];
 }
 
 export function formatDeliveryAddress({

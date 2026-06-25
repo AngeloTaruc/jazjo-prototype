@@ -94,20 +94,39 @@ test("validateCustomerRegistration rejects invalid Philippine contact", () => {
       address: "San Juan City",
       password: "Aa12345!"
     }),
-    /Contact number must use Philippine format/
+    /Contact number must use Philippine mobile format/
   );
 });
 
-test("validatePasswordComplexity requires mixed character classes", () => {
+test("validatePasswordComplexity allows any length at or above 8 characters", () => {
   assert.equal(server.validatePasswordComplexity("Aa12345!"), "Aa12345!");
-  assert.throws(
-    () => server.validatePasswordComplexity("StrongPass1!"),
-    /Password must be exactly 8 characters/
-  );
+  assert.equal(server.validatePasswordComplexity("StrongPass1!@#$%^&*()"), "StrongPass1!@#$%^&*()");
   assert.throws(
     () => server.validatePasswordComplexity("password123"),
-    /Password must be exactly 8 characters/
+    /Password must include uppercase, lowercase, number, and special character/
   );
+});
+
+test("validatePhilippineContact accepts only 09-prefixed 11 digit mobile numbers", () => {
+  assert.equal(server.validatePhilippineContact("09123456789"), "09123456789");
+  assert.throws(() => server.validatePhilippineContact("12345678901"), /Philippine mobile format/);
+  assert.throws(() => server.validatePhilippineContact("0912345678"), /Philippine mobile format/);
+  assert.throws(() => server.validatePhilippineContact("091234567890"), /Philippine mobile format/);
+  assert.throws(() => server.validatePhilippineContact("09123abc789"), /Philippine mobile format/);
+});
+
+test("validateQuantityPerCase requires a positive integer", () => {
+  assert.equal(server.validateQuantityPerCase(24), 24);
+  assert.equal(server.validateQuantityPerCase("12"), 12);
+  assert.throws(() => server.validateQuantityPerCase(0), /Quantity per case must be a positive integer/);
+  assert.throws(() => server.validateQuantityPerCase(1.5), /Quantity per case must be a positive integer/);
+});
+
+test("makeOrderCode uses an incrementing sequence for unique order numbers", () => {
+  const day = new Date("2026-06-25T08:00:00Z");
+
+  assert.equal(server.makeOrderCode(day, 1), "ORD-20260625-0001");
+  assert.equal(server.makeOrderCode(day, 42), "ORD-20260625-0042");
 });
 
 test("buildEmailJsVerificationPayload matches the verification template variables", () => {

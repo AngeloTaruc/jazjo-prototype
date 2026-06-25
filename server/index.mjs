@@ -316,7 +316,7 @@ async function getStoreSettings(){
 function validatePhilippineContact(contact){
   const normalized = String(contact || "").trim();
   if(!/^09\d{9}$/.test(normalized)){
-    throw httpError("Contact number must use Philippine format: 09xxxxxxxxx.");
+    throw httpError("Contact number must use Philippine mobile format: 09xxxxxxxxx.");
   }
   return normalized;
 }
@@ -370,6 +370,10 @@ async function sendRegistrationVerificationEmail(email, code){
 
 async function createRegistrationVerificationCode(payload){
   const email = validateGmailEmail(payload?.email);
+  const existing = await getProfileByEmail(email);
+  if(existing){
+    throw httpError("An account with this email already exists.", 409);
+  }
   const code = String(crypto.randomInt(100000, 1000000));
   const emailSent = await sendRegistrationVerificationEmail(email, code);
   registrationVerificationCodes.set(email, {
@@ -496,6 +500,18 @@ async function validateDeliveryAddress(payload){
   const cityCode = String(payload?.cityCode || payload?.city_code || "").trim();
   const cityName = String(payload?.cityName || payload?.city_name || "").trim();
   if(!fullAddress) throw httpError("Please enter the full delivery address.");
+  if(!street && !barangay && !provinceCode && !cityCode){
+    return {
+      fullAddress,
+      street: "",
+      barangay: "",
+      provinceCode: "",
+      provinceName: "",
+      cityCode: "",
+      cityName: "",
+      address: fullAddress
+    };
+  }
   if(!street) throw httpError("Please enter the street.");
   if(!barangay) throw httpError("Please enter the barangay.");
   if(!provinceCode) throw httpError("Please choose a province.");
@@ -534,13 +550,21 @@ async function validateDeliveryAddress(payload){
 
 function validatePasswordComplexity(password){
   const value = String(password || "");
-  if(value.length !== 8){
-    throw httpError("Password must be exactly 8 characters.");
+  if(value.length < 8){
+    throw httpError("Password must be at least 8 characters.");
   }
   if(!/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9]/.test(value)){
     throw httpError("Password must include uppercase, lowercase, number, and special character.");
   }
   return value;
+}
+
+function validateQuantityPerCase(value){
+  const quantity = Number(value ?? 1);
+  if(!Number.isInteger(quantity) || quantity <= 0){
+    throw httpError("Quantity per case must be a positive integer.");
+  }
+  return quantity;
 }
 
 function validateCustomerRegistration(payload){
@@ -594,10 +618,26 @@ function isStaleCustomerPendingOrder(order, now = Date.now()){
   return now - createdAt > CUSTOMER_PENDING_ORDER_TTL_MS;
 }
 
-function makeOrderCode(){
-  const d = new Date();
+function makeOrderCode(date = new Date(), sequence = 1){
+  const d = date instanceof Date ? date : new Date(date);
   const pad = (n) => String(n).padStart(2, "0");
-  return `ORD-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${Math.floor(100 + Math.random()*900)}`;
+  const safeSequence = Math.max(1, Number(sequence || 1));
+  return `ORD-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${String(safeSequence).padStart(4, "0")}`;
+}
+
+async function makeNextOrderCode(date = new Date()){
+  const d = date instanceof Date ? date : new Date(date);
+  const pad = (n) => String(n).padStart(2, "0");
+  const prefix = `ORD-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-`;
+  const rows = await supabaseRequest(
+    `/rest/v1/orders?select=order_code&order_code=like.${encodeURIComponent(`${prefix}%`)}&order=order_code.desc&limit=1`,
+    { serviceRole: true }
+  ).catch(() => []);
+  const latest = String(rows?.[0]?.order_code || "");
+  const latestSequence = latest.startsWith(prefix)
+    ? Number(latest.slice(prefix.length))
+    : 0;
+  return makeOrderCode(d, Number.isFinite(latestSequence) ? latestSequence + 1 : 1);
 }
 
 function formatDate(value){
@@ -645,7 +685,7 @@ async function updateProfileByEmail(email, payload){
 async function getProductsBySkus(skus){
   if(!skus.length) return [];
   const inFilter = encodeURIComponent(`(${escapeCsvValues(skus)})`);
-  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,image_url,is_active";
+  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,quantity_per_case,image_url,is_active";
   const embedQuery = `/rest/v1/products?select=${baseSelect},categories(name)&sku=in.${inFilter}`;
   try{
     const rows = await supabaseRequest(embedQuery, { serviceRole: true });
@@ -664,7 +704,7 @@ function getProductCategoryName(row){
 }
 
 async function listProducts(){
-  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,image_url,is_active";
+  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,quantity_per_case,image_url,is_active";
   const embedQuery = `/rest/v1/products?select=${baseSelect},categories(name)&is_active=eq.true&order=name.asc`;
   let rows = [];
   try{
@@ -688,6 +728,7 @@ async function listProducts(){
     unit: r.unit,
     price: Number(r.price),
     stockCases: Number(r.stock_cases),
+    quantityPerCase: validateQuantityPerCase(r.quantity_per_case || 1),
     image_url: r.image_url || ""
   }));
 }
@@ -757,7 +798,7 @@ async function deleteAdminCategory(name){
 }
 
 async function getProductBySkuRaw(sku){
-  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,image_url,is_active";
+  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,quantity_per_case,image_url,is_active";
   const encodedSku = encodeURIComponent(sku);
   try{
     const rows = await supabaseRequest(
@@ -780,7 +821,7 @@ async function getProductBySkuRaw(sku){
 }
 
 async function getProductByNameRaw(name){
-  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,image_url,is_active";
+  const baseSelect = "id,sku,name,category_id,unit,price,stock_cases,quantity_per_case,image_url,is_active";
   const encodedName = encodeURIComponent(String(name || "").trim());
   try{
     const rows = await supabaseRequest(
@@ -834,6 +875,7 @@ function toInventoryProductRow(row){
     unit: row.unit,
     price: Number(row.price || 0),
     stockCases: Number(row.stock_cases || 0),
+    quantityPerCase: validateQuantityPerCase(row.quantity_per_case || 1),
     image_url: row.image_url || "",
     is_active: row.is_active !== false
   };
@@ -846,6 +888,7 @@ async function createInventoryProduct(payload){
   const unit = String(payload.unit || "").trim();
   const price = Number(payload.price || 0);
   const stockCases = Number(payload.stockCases ?? payload.stock_cases ?? 0);
+  const quantityPerCase = validateQuantityPerCase(payload.quantityPerCase ?? payload.quantity_per_case ?? 1);
   const imageUrl = String(payload.imageUrl || payload.image_url || "").trim();
   const isActive = payload.isActive !== false;
 
@@ -883,6 +926,7 @@ async function createInventoryProduct(payload){
       unit,
       price,
       stock_cases: stockCases,
+      quantity_per_case: quantityPerCase,
       image_url: imageUrl || null,
       is_active: isActive
     }]
@@ -916,6 +960,9 @@ async function updateInventoryProductByName(name, payload){
     const stockCases = Number(payload.stockCases ?? payload.stock_cases);
     if(Number.isNaN(stockCases) || stockCases < 0) throw new Error("stockCases must be a non-negative number.");
     patch.stock_cases = stockCases;
+  }
+  if("quantityPerCase" in payload || "quantity_per_case" in payload){
+    patch.quantity_per_case = validateQuantityPerCase(payload.quantityPerCase ?? payload.quantity_per_case);
   }
   if("imageUrl" in payload || "image_url" in payload){
     patch.image_url = String(payload.imageUrl ?? payload.image_url ?? "").trim() || null;
@@ -1016,6 +1063,40 @@ async function listAllOrdersDetailed(){
     paymentStatus: order.payment_status,
     profile: profileByUser.get(order.user_id) || null
   }));
+}
+
+async function listAdminOrdersDetailedPage({ page = 1, perPage = 10, status = "All", search = "" } = {}){
+  const orders = await listAllOrdersDetailed();
+  const query = String(search || "").trim().toLowerCase();
+  const filtered = orders.filter((order) => {
+    const matchesStatus = !status || status === "All" || toUiStatus(order.status) === status || String(order.status || "") === status;
+    if(!matchesStatus) return false;
+    if(!query) return true;
+    const haystack = [
+      order.id,
+      order.customerName,
+      order.contact,
+      order.createdAt,
+      toUiStatus(order.status),
+      order.paymentStatus,
+      ...(order.items || []).map((item) => item.name)
+    ].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
+  const safePerPage = Math.min(100, Math.max(1, Number(perPage) || 10));
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / safePerPage));
+  const safePage = Math.min(totalPages, Math.max(1, Number(page) || 1));
+  const start = (safePage - 1) * safePerPage;
+  return {
+    orders: filtered.slice(start, start + safePerPage),
+    pagination: {
+      page: safePage,
+      perPage: safePerPage,
+      total,
+      totalPages
+    }
+  };
 }
 
 function getRewardConfig(type){
@@ -1181,10 +1262,13 @@ function computeRewardDiscount({ rewardType, subtotal, deliveryFee }){
 }
 
 async function getPanelDashboard(){
-  const [orders, products] = await Promise.all([listAllOrdersDetailed(), listProducts()]);
+  const [orders, products, profiles] = await Promise.all([listAllOrdersDetailed(), listProducts(), listProfiles()]);
   const recentOrders = orders.slice(0, 8);
   const totalSales = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
   const transactions = orders.length;
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayOrders = orders.filter((o) => String(o.createdAtRaw || o.createdAt || "").slice(0, 10) === todayKey);
+  const salesToday = todayOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
   const byProduct = new Map();
   for(const o of orders){
     for(const it of o.items || []){
@@ -1198,9 +1282,19 @@ async function getPanelDashboard(){
   }
   const lowStockCount = products.filter(p => Number(p.stockCases) > 0 && Number(p.stockCases) <= 10).length;
   const outOfStockCount = products.filter(p => Number(p.stockCases) <= 0).length;
+  const lowStock = products
+    .filter(p => Number(p.stockCases) <= 10)
+    .map(p => ({
+      ...p,
+      status: Number(p.stockCases) <= 0 ? "Out of Stock" : "Low Stock"
+    }));
   return {
     recentOrders,
-    kpis: { totalSales, transactions, bestSeller, lowStockCount, outOfStockCount }
+    orders,
+    customers: profiles.filter((profile) => String(profile.role || "") === "customer"),
+    todayOrders,
+    lowStock,
+    kpis: { totalSales, salesToday, transactions, totalOrders: orders.length, totalCustomers: profiles.filter((profile) => String(profile.role || "") === "customer").length, bestSeller, lowStockCount, outOfStockCount }
   };
 }
 
@@ -1432,18 +1526,26 @@ async function getPanelDelivery(){
   const activeOrders = orders.filter((o) => inProgressStatuses.has(String(o.status || "")));
   const productTracks = [];
   for(const order of orders){
-    for(const item of (order.items || [])){
-      productTracks.push({
-        orderId: order.id,
-        productName: item.name,
-        qty: Number(item.qty || 0),
-        customerName: order.customerName,
-        status: order.status,
-        updatedAt: (order.status_events || []).slice(-1)[0]?.created_at || order.createdAt,
-        orderCreatedAt: order.createdAt,
-        statusEvents: order.status_events || []
-      });
-    }
+    const items = (order.items || []).map((item) => ({
+      productName: item.name,
+      name: item.name,
+      qty: Number(item.qty || 0)
+    }));
+    productTracks.push({
+      orderId: order.id,
+      productName: items.length > 1 ? `${items.length} items` : (items[0]?.name || "-"),
+      qty: items.reduce((sum, item) => sum + Number(item.qty || 0), 0),
+      items,
+      customerName: order.customerName,
+      recipientName: order.customerName,
+      contact: order.contact,
+      deliveryAddress: order.address,
+      status: order.status,
+      updatedAt: (order.status_events || []).slice(-1)[0]?.created_at || order.createdAt,
+      deliveryDate: String(order.status || "") === "Delivered" ? ((order.status_events || []).slice(-1)[0]?.created_at || order.createdAt) : "",
+      orderCreatedAt: order.createdAt,
+      statusEvents: order.status_events || []
+    });
   }
   return {
     activeOrder: activeOrders[0] || orders[0] || null,
@@ -1588,7 +1690,15 @@ async function registerCustomerAccount(payload){
     throw httpError("An account with this email already exists.", 409);
   }
 
-  const created = await supabaseAdminCreateUser({ email, password, fullName });
+  let created = null;
+  try{
+    created = await supabaseAdminCreateUser({ email, password, fullName });
+  }catch(err){
+    if(/already|registered|exists|duplicate/i.test(String(err?.message || ""))){
+      throw httpError("An account with this email already exists.", 409);
+    }
+    throw err;
+  }
   const userId = created?.id || created?.user?.id || "";
   if(!userId){
     throw new Error("Supabase did not return the new user id.");
@@ -1831,6 +1941,7 @@ async function getOrderForUserId(orderCode, userId){
 
 function uiStatusToDbStatus(status){
   const map = {
+    "Pending Payment": "pending_payment",
     "Order Placed": "order_placed",
     "Preparing": "preparing",
     "In Transit": "in_transit",
@@ -1916,7 +2027,7 @@ async function createOrder(payload, authProfile){
     })
     : 0;
   const total = Math.max(0, Number((subtotal + deliveryFee - discountAmount).toFixed(2)));
-  const orderCode = makeOrderCode();
+  const orderCode = await makeNextOrderCode();
 
   const useQrph = isQrphMethod(paymentMethod);
   const orderInsertBody = {
@@ -2264,6 +2375,27 @@ async function deleteOrderByCode(orderCode){
   return { deleted: true };
 }
 
+async function deleteOrdersByStatus(status){
+  const dbStatus = uiStatusToDbStatus(status);
+  if(!dbStatus || String(status || "") === "All"){
+    throw httpError("Choose a specific order status before bulk deleting.", 400);
+  }
+  const rows = await supabaseRequest(`/rest/v1/orders?select=id,order_code,status&status=eq.${encodeURIComponent(dbStatus)}&order=created_at.desc`, {
+    serviceRole: true
+  });
+  const results = [];
+  for(const order of rows || []){
+    const result = await deleteOrderByCode(order.order_code);
+    results.push({ orderCode: order.order_code, ...result });
+  }
+  return {
+    status: toUiStatus(dbStatus),
+    matched: rows.length,
+    deleted: results.filter((entry) => entry.deleted).length,
+    results
+  };
+}
+
 async function findOrderByCode(orderCode){
   const rows = await supabaseRequest(`/rest/v1/orders?select=id,order_code,user_id,status,payment_status,paymongo_checkout_session_id&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`, {
     serviceRole: true
@@ -2543,6 +2675,10 @@ async function handleApi(req, res, url){
       return true;
     }
     const session = await supabasePasswordLogin(email, password);
+    if(session?.user && !session.user.email_confirmed_at && !session.user.confirmed_at){
+      sendJson(res, 403, { error: "Please verify your email address before logging in." });
+      return true;
+    }
     const profile = await getProfileFullByEmail(email);
     if(!profile){
       sendJson(res, 403, { error: "Profile not found for this user." });
@@ -2552,7 +2688,9 @@ async function handleApi(req, res, url){
       user: {
         email: profile.email,
         role: profile.role,
-        full_name: profile.full_name || ""
+    full_name: profile.full_name || "",
+    contact: profile.contact || "",
+    address: profile.address || ""
       },
       session: {
         access_token: session.access_token,
@@ -2721,7 +2859,20 @@ async function handleApi(req, res, url){
   }
   if(req.method === "GET" && url.pathname === "/api/panel/admin/orders"){
     await requireAuth(req, ["admin"]);
-    sendJson(res, 200, { orders: await listAllOrdersDetailed() });
+    const result = await listAdminOrdersDetailedPage({
+      page: url.searchParams.get("page"),
+      perPage: url.searchParams.get("perPage"),
+      status: url.searchParams.get("status") || "All",
+      search: url.searchParams.get("search") || ""
+    });
+    sendJson(res, 200, result);
+    return true;
+  }
+  if(req.method === "DELETE" && url.pathname === "/api/panel/admin/orders/bulk-delete"){
+    await requireAuth(req, ["admin"]);
+    const payload = await readJson(req);
+    const result = await deleteOrdersByStatus(payload.status);
+    sendJson(res, 200, { ok: true, ...result });
     return true;
   }
   if(req.method === "DELETE" && url.pathname.startsWith("/api/panel/admin/orders/")){
@@ -2909,12 +3060,14 @@ export {
   getPsgcCitiesPath,
   handleRequest,
   isPaymongoProcessingStatusError,
+  makeOrderCode,
   normalizeReturnBaseUrl,
   paymongoCheckoutLooksPaid,
   parsePaymongoWebhookEvent,
   parseProductImagePayload,
   validateCustomerRegistration,
   validatePasswordComplexity,
-  validatePhilippineContact
+  validatePhilippineContact,
+  validateQuantityPerCase
 };
 export default handleRequest;

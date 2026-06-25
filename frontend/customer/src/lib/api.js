@@ -1,4 +1,4 @@
-import { ORDERS_KEY, getToken, normalizeCategory, placeholderImage, readStorage, statusLabel } from "./customerLogic.js";
+import { ORDERS_KEY, getToken, mergeOrdersByOrderNumber, normalizeCategory, placeholderImage, readStorage, statusLabel } from "./customerLogic.js";
 
 const PSGC_API_BASE = "https://psgc.gitlab.io/api";
 const METRO_MANILA_CODE = "130000000";
@@ -100,6 +100,7 @@ export async function apiProducts() {
     unit: p.unit,
     price: Number(p.price || 0),
     stockCases: Number(p.stockCases ?? p.stock_cases ?? 0),
+    quantityPerCase: Number(p.quantityPerCase ?? p.quantity_per_case ?? 1),
     img: p.image_url || placeholderImage(p.name)
   }));
 }
@@ -147,7 +148,30 @@ export async function apiProvinceCities(provinceCode) {
 }
 
 export async function apiProfile() {
-  return request("/api/profile");
+  const data = await request("/api/profile");
+  return normalizeCustomerProfile(data);
+}
+
+export function normalizeCustomerProfile(data = {}) {
+  const profile = data.profile || data.user || data || {};
+  const fullName = String(profile.full_name || profile.fullName || "").trim();
+  const parts = fullName.split(/\s+/).filter(Boolean);
+  const firstName = String(profile.firstName || profile.first_name || parts[0] || "").trim();
+  const lastName = String(
+    profile.lastName || profile.last_name || (parts.length > 1 ? parts.slice(1).join(" ") : "")
+  ).trim();
+  const rawAddress = profile.address || {};
+  const address = rawAddress && typeof rawAddress === "object"
+    ? rawAddress
+    : { fullAddress: String(rawAddress || "").trim() };
+  return {
+    firstName,
+    lastName,
+    fullName,
+    email: String(profile.email || "").trim(),
+    contact: String(profile.contact || "").trim(),
+    address
+  };
 }
 
 export async function apiSaveProfile(payload) {
@@ -166,7 +190,7 @@ export async function apiChangePassword(payload) {
 
 export async function apiOrders() {
   const data = await request("/api/orders");
-  return (data.orders || []).map(normalizeOrder);
+  return mergeOrdersByOrderNumber((data.orders || []).map(normalizeOrder));
 }
 
 export async function apiOrderDetails(orderCode) {
@@ -234,11 +258,51 @@ export async function apiUpdateOrderDetails(orderCode, payload) {
 }
 
 export async function apiAdminDashboard() {
-  return request("/api/panel/admin/dashboard");
+  const data = await request("/api/panel/admin/dashboard");
+  const orders = mergeOrdersByOrderNumber((data.orders || []).map(normalizeOrder));
+  const recentOrders = mergeOrdersByOrderNumber((data.recentOrders || []).map(normalizeOrder));
+  const todayOrders = mergeOrdersByOrderNumber((data.todayOrders || []).map(normalizeOrder));
+  return { ...data, orders, recentOrders, todayOrders };
 }
 
-export async function apiAdminOrders() {
-  return request("/api/panel/admin/orders");
+export async function apiAdminOrders({ page = 1, perPage = 10, status = "All", search = "" } = {}) {
+  const params = new URLSearchParams({
+    page: String(page),
+    perPage: String(perPage),
+    status,
+    search
+  });
+  const data = await request(`/api/panel/admin/orders?${params.toString()}`);
+  const normalizedOrders = mergeOrdersByOrderNumber((data.orders || []).map(normalizeOrder));
+  if (data.pagination) {
+    return { ...data, orders: normalizedOrders };
+  }
+  const query = String(search || "").trim().toLowerCase();
+  const filtered = normalizedOrders.filter((order) => {
+    const matchesStatus = status === "All" || statusLabel(order.status) === status;
+    if (!matchesStatus) return false;
+    if (!query) return true;
+    const haystack = [
+      order.id,
+      order.customerName,
+      order.contact,
+      order.createdAt,
+      statusLabel(order.status),
+      order.paymentStatus,
+      ...(order.items || []).map((item) => item.name)
+    ].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
+  const safePerPage = Math.max(1, Number(perPage) || 10);
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / safePerPage));
+  const safePage = Math.min(totalPages, Math.max(1, Number(page) || 1));
+  const start = (safePage - 1) * safePerPage;
+  return {
+    ...data,
+    orders: filtered.slice(start, start + safePerPage),
+    pagination: { page: safePage, perPage: safePerPage, total, totalPages }
+  };
 }
 
 export async function apiAdminDeleteOrder(orderCode) {
@@ -249,6 +313,13 @@ export async function apiAdminDeleteOrder(orderCode) {
     throw new Error(`Order ${orderCode} was not found on the server.`);
   }
   return result;
+}
+
+export async function apiAdminBulkDeleteOrdersByStatus(status) {
+  return request("/api/panel/admin/orders/bulk-delete", {
+    method: "DELETE",
+    body: JSON.stringify({ status })
+  });
 }
 
 export async function apiAdminInventory() {
@@ -334,7 +405,8 @@ export async function apiAdminDelivery() {
 }
 
 export async function apiStaffOrders() {
-  return request("/api/panel/staff/orders");
+  const data = await request("/api/panel/staff/orders");
+  return { ...data, orders: mergeOrdersByOrderNumber((data.orders || []).map(normalizeOrder)) };
 }
 
 export async function apiStaffInventory() {

@@ -33,7 +33,7 @@
     .message.ok{color:#0b7a33}
     .message.err{color:#b91c1c}
     .imagePicker{display:grid;grid-template-columns:72px 1fr;gap:10px;align-items:center}
-    .imagePreview,.productThumb{width:64px;height:64px;border-radius:12px;border:1px solid rgba(229,231,235,.9);background:#f8fafc;object-fit:cover}
+    .imagePreview,.productThumb{width:64px;height:64px;border-radius:12px;border:1px solid rgba(229,231,235,.9);background:transparent;object-fit:contain}
     .productThumb{width:48px;height:48px;border-radius:10px}
     .imagePicker input{padding:8px}
     .modalOverlay{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:9999;padding:16px}
@@ -121,6 +121,10 @@
               <input id="newProductStock" type="number" min="0" step="0.5" value="0" />
             </div>
             <div class="field">
+              <label>Quantity per Case</label>
+              <input id="newProductQuantityPerCase" type="number" min="1" step="1" value="1" />
+            </div>
+            <div class="field">
               <label>Product image</label>
               <div class="imagePicker">
                 <img id="newProductImagePreview" class="imagePreview" alt="Product image preview" />
@@ -150,9 +154,9 @@
         <h3 style="margin:16px 0 0;font-weight:1000;">Product Inventory (Cases)</h3>
         <table>
           <thead>
-            <tr><th>Image</th><th>Product</th><th>Stock (Cases)</th><th>Status</th><th>Action</th></tr>
+            <tr><th>Image</th><th>Product</th><th>Stock (Cases)</th><th>Qty/Case</th><th>Status</th><th>Action</th></tr>
           </thead>
-          <tbody><tr><td colspan="5">Loading...</td></tr></tbody>
+          <tbody><tr><td colspan="6">Loading...</td></tr></tbody>
         </table>
 
         <div class="forecast">

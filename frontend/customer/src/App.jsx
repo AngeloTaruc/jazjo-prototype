@@ -32,7 +32,6 @@ import {
   LogOut,
   Mail,
   MapPin,
-  MessageCircle,
   Moon,
   Package,
   Phone,
@@ -74,6 +73,7 @@ import {
   DEFAULT_DELIVERY_SETTINGS,
   FAVORITES_KEY,
   ORDERS_KEY,
+  buildCheckoutPrefill,
   calculateDeliveryFee,
   canAddCartQuantity,
   canAccessPanelRoute,
@@ -227,13 +227,18 @@ function Input({
   onValueChange,
   isRequired,
   isReadOnly,
+  isInvalid,
+  errorMessage,
   type = "text",
   placeholder = "",
   className = "",
+  color,
   startContent,
   endContent,
+  classNames,
   ...props
 }) {
+  const invalid = Boolean(isInvalid);
   return (
     <label
       className={`grid gap-2 text-sm font-semibold text-[var(--text-secondary)] ${className}`}
@@ -257,15 +262,33 @@ function Input({
         ) : null}
         <HeroInput
           {...props}
+          isInvalid={invalid}
+          color={invalid ? "danger" : color}
           type={type}
           value={value}
           readOnly={isReadOnly}
           required={isRequired}
           placeholder={placeholder}
           onChange={(event) => onValueChange?.(event.target.value)}
-          className={`min-h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-input)] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] ${startContent ? "pl-11" : ""} ${endContent ? "pr-11" : ""}`}
+          className={`min-h-11 w-full rounded-xl border bg-[var(--bg-input)] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] ${
+            invalid
+              ? "border-red-500 shadow-[0_0_0_1px_rgba(248,113,113,.75)] focus-within:border-red-500 focus-within:shadow-[0_0_0_2px_rgba(248,113,113,.55)]"
+              : "border-[var(--border)]"
+          } ${startContent ? "pl-11" : ""} ${endContent ? "pr-11" : ""}`}
+          classNames={{
+            ...classNames,
+            inputWrapper: `${classNames?.inputWrapper || ""} ${
+              invalid
+                ? "!border-red-500 !shadow-[0_0_0_1px_rgba(248,113,113,.75)] data-[focus=true]:!border-red-500 data-[focus=true]:!shadow-[0_0_0_2px_rgba(248,113,113,.55)]"
+                : ""
+            }`,
+            errorMessage: `${classNames?.errorMessage || ""} text-red-400`,
+          }}
         />
       </span>
+      {invalid && errorMessage ? (
+        <span className="text-xs font-semibold text-red-400">{errorMessage}</span>
+      ) : null}
     </label>
   );
 }
@@ -1309,7 +1332,7 @@ function ProductCard({
       <Card className="group h-full border border-white/10 bg-slate-900/80 shadow-xl shadow-black/20 transition-shadow duration-300 hover:shadow-2xl hover:shadow-emerald-500/10">
         <CardBody className="gap-4">
           <div
-            className={`relative ${compact ? "h-36" : "h-44"} rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-400/10 via-white/[.03] to-sky-400/10 p-3 transition-all duration-300 group-hover:border-emerald-500/30 group-hover:from-emerald-400/20`}
+            className={`relative ${compact ? "h-36" : "h-44"} rounded-2xl border border-white/10 bg-transparent p-3 transition-all duration-300 group-hover:border-emerald-500/30`}
           >
             {isFavorite ? (
               <Chip
@@ -1370,6 +1393,9 @@ function ProductCard({
               {out ? "Out of Stock" : `${formatQty(product.stockCases)} cases`}
             </Chip>
           </div>
+          <p className="text-xs font-semibold text-slate-500">
+            {Number(product.quantityPerCase || 1).toLocaleString()} pcs per case
+          </p>
           {product.description ? (
             <p className="min-h-10 text-sm leading-6 text-slate-300 line-clamp-2">
               {product.description}
@@ -1722,10 +1748,27 @@ function Dashboard({
 function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, setMessage }) {
   const [form, setForm] = useState({
     customerName: "",
+    email: "",
     contact: "",
     address: {},
+    addressText: "",
     paymentMethod: "QRPH (GCash)",
   });
+  const [fieldErrors, setFieldErrors] = useState({});
+  useEffect(() => {
+    apiProfile()
+      .then((data) => {
+        const prefill = buildCheckoutPrefill(data);
+        setForm((current) => ({
+          ...current,
+          customerName: current.customerName || prefill.customerName,
+          email: current.email || prefill.email,
+          contact: current.contact || prefill.contact,
+          addressText: current.addressText || prefill.addressText,
+        }));
+      })
+      .catch(() => {});
+  }, []);
   const lines = cart
     .map((item) => {
       const product = products.find((entry) => entry.id === item.productId);
@@ -1766,14 +1809,26 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
 
   const checkout = async (event) => {
     event.preventDefault();
+    setFieldErrors({});
     if (!lines.length) return setMessage("Your cart is empty.");
+    if (!form.customerName.trim()) {
+      setFieldErrors({ customerName: "Full name is required." });
+      return;
+    }
     const contact = validateContact(form.contact);
-    if (!contact.ok) return setMessage(contact.message);
-    const address = validateDeliveryAddress(form.address);
-    if (!address.ok) return setMessage(address.message);
+    if (!contact.ok) {
+      setFieldErrors({ contact: contact.message });
+      return;
+    }
+    const addressText = String(form.addressText || "").trim();
+    if (!addressText) {
+      setFieldErrors({ addressText: "Delivery address is required." });
+      return;
+    }
     const result = await apiCreateOrder({
       ...form,
-      ...address.value,
+      fullAddress: addressText,
+      address: addressText,
       returnBaseUrl: window.location.origin,
       items: lines.map((line) => ({
         productId: line.product.id,
@@ -1794,6 +1849,10 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
     await refreshOrders().catch(() => {});
     go("orders");
   };
+  const checkoutContactValidation = form.contact ? validateContact(form.contact) : { ok: true };
+  const checkoutContactError = checkoutContactValidation.ok
+    ? fieldErrors.contact
+    : checkoutContactValidation.message;
 
   if (!lines.length) {
     return (
@@ -1855,6 +1914,9 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
                       <strong>{line.product.name}</strong>
                       <p className="text-sm text-slate-400">
                         {line.packLabel} - {formatQty(line.caseTotal)} case(s)
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {Number(line.product.quantityPerCase || 1).toLocaleString()} pcs per case
                       </p>
                     </div>
                   </div>
@@ -1928,19 +1990,34 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
               label="Name"
               value={form.customerName}
               onValueChange={(v) => setForm({ ...form, customerName: v })}
+              isInvalid={Boolean(fieldErrors.customerName)}
+              errorMessage={fieldErrors.customerName}
+            />
+            <Input
+              label="Email"
+              type="email"
+              value={form.email}
+              onValueChange={(v) => setForm({ ...form, email: v })}
+              startContent={<Mail size={16} />}
             />
             <Input
               isRequired
               label="Contact"
               value={form.contact}
-              onValueChange={(v) => setForm({ ...form, contact: v })}
+              onValueChange={(v) => setForm({ ...form, contact: String(v || "").slice(0, 11) })}
               placeholder="09xxxxxxxxx"
+              inputMode="numeric"
+              maxLength={11}
+              isInvalid={Boolean(checkoutContactError)}
+              errorMessage={checkoutContactError}
             />
-            <DeliveryAddressSelect
+            <Input
               isRequired
-              value={form.address}
-              onValueChange={(v) => setForm({ ...form, address: v })}
-              setMessage={setMessage}
+              label="Delivery Address"
+              value={form.addressText}
+              onValueChange={(v) => setForm({ ...form, addressText: v })}
+              isInvalid={Boolean(fieldErrors.addressText)}
+              errorMessage={fieldErrors.addressText}
             />
             <div className="grid gap-2">
               <div className="flex items-center justify-between gap-3">
@@ -2554,29 +2631,60 @@ function ProfilePage({ setMessage }) {
     currentPassword: "",
     newPassword: "",
   });
+  const [fieldErrors, setFieldErrors] = useState({});
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     apiProfile()
-      .then((data) => setProfile({ ...data, address: {} }))
+      .then((data) => setProfile(data))
       .catch((err) => setMessage(err.message))
       .finally(() => setLoading(false));
   }, []);
   const saveProfile = async (event) => {
     event.preventDefault();
+    setFieldErrors({});
     const contact = validateContact(profile.contact);
-    if (!contact.ok) return setMessage(contact.message);
+    if (!contact.ok) {
+      setFieldErrors({ contact: contact.message });
+      return;
+    }
     const address = validateDeliveryAddress(profile.address);
-    if (!address.ok) return setMessage(address.message);
-    await apiSaveProfile({ ...profile, ...address.value });
-    setMessage("Profile saved.");
+    if (!address.ok) {
+      setFieldErrors({ address: address.message });
+      return;
+    }
+    try {
+      const fullName = `${profile.firstName || ""} ${profile.lastName || ""}`.trim();
+      await apiSaveProfile({ ...profile, fullName, ...address.value });
+      setMessage("Profile saved.");
+    } catch (err) {
+      const message = err.message || "Unable to save profile.";
+      if (/contact/i.test(message)) setFieldErrors({ contact: message });
+      else if (/address|province|city|barangay|street/i.test(message)) setFieldErrors({ address: message });
+      else setFieldErrors({ profile: message });
+    }
   };
   const savePassword = async (event) => {
     event.preventDefault();
+    setFieldErrors({});
+    if (!String(passwords.currentPassword || "").trim()) {
+      setFieldErrors({ currentPassword: "Current password is required." });
+      return;
+    }
     const valid = validatePassword(passwords.newPassword);
-    if (!valid.ok) return setMessage(valid.message);
-    await apiChangePassword(passwords);
-    setPasswords({ currentPassword: "", newPassword: "" });
-    setMessage("Password changed.");
+    if (!valid.ok) {
+      setFieldErrors({ newPassword: valid.message });
+      return;
+    }
+    try {
+      await apiChangePassword(passwords);
+      setPasswords({ currentPassword: "", newPassword: "" });
+      setMessage("Password changed.");
+    } catch (err) {
+      const message = err.message || "Unable to change password.";
+      setFieldErrors(/current|incorrect|wrong/i.test(message)
+        ? { currentPassword: message }
+        : { newPassword: message });
+    }
   };
   if (loading) {
     return (
@@ -2604,6 +2712,10 @@ function ProfilePage({ setMessage }) {
       </section>
     );
   }
+  const profileContactValidation = profile.contact ? validateContact(profile.contact) : { ok: true };
+  const profileContactError = profileContactValidation.ok
+    ? fieldErrors.contact
+    : profileContactValidation.message;
   return (
     <motion.section
       className="grid gap-5 lg:grid-cols-2"
@@ -2639,15 +2751,37 @@ function ProfilePage({ setMessage }) {
             <Input
               label="Contact"
               value={profile.contact || ""}
-              onValueChange={(v) => setProfile({ ...profile, contact: v })}
+              onValueChange={(v) => {
+                setProfile({ ...profile, contact: String(v || "").slice(0, 11) });
+                setFieldErrors((current) => ({ ...current, contact: undefined }));
+              }}
+              placeholder="09xxxxxxxxx"
+              inputMode="numeric"
+              maxLength={11}
+              isInvalid={Boolean(profileContactError)}
+              errorMessage={profileContactError}
             />
             <Input label="Email" value={profile.email || ""} isReadOnly />
-            <DeliveryAddressSelect
-              className="sm:col-span-2"
-              value={profile.address || {}}
-              onValueChange={(v) => setProfile({ ...profile, address: v })}
-              setMessage={setMessage}
-            />
+            <div className={`sm:col-span-2 ${fieldErrors.address ? "rounded-xl border border-red-500 p-2 shadow-[0_0_0_1px_rgba(248,113,113,.75)]" : ""}`}>
+              <DeliveryAddressSelect
+                value={profile.address || {}}
+                onValueChange={(v) => {
+                  setProfile({ ...profile, address: v });
+                  setFieldErrors((current) => ({ ...current, address: undefined }));
+                }}
+                setMessage={setMessage}
+              />
+              {fieldErrors.address ? (
+                <p className="mt-2 text-xs font-semibold text-red-400">
+                  {fieldErrors.address}
+                </p>
+              ) : null}
+            </div>
+            {fieldErrors.profile ? (
+              <p className="sm:col-span-2 text-xs font-semibold text-red-400">
+                {fieldErrors.profile}
+              </p>
+            ) : null}
             <Button color="success" type="submit" className="sm:col-span-2">
               Save Profile
             </Button>
@@ -2674,17 +2808,23 @@ function ProfilePage({ setMessage }) {
               label="Current Password"
               type="password"
               value={passwords.currentPassword}
-              onValueChange={(v) =>
-                setPasswords({ ...passwords, currentPassword: v })
-              }
+              onValueChange={(v) => {
+                setPasswords({ ...passwords, currentPassword: v });
+                setFieldErrors((current) => ({ ...current, currentPassword: undefined }));
+              }}
+              isInvalid={Boolean(fieldErrors.currentPassword)}
+              errorMessage={fieldErrors.currentPassword}
             />
             <Input
               label="New Password"
               type="password"
               value={passwords.newPassword}
-              onValueChange={(v) =>
-                setPasswords({ ...passwords, newPassword: v })
-              }
+              onValueChange={(v) => {
+                setPasswords({ ...passwords, newPassword: v });
+                setFieldErrors((current) => ({ ...current, newPassword: undefined }));
+              }}
+              isInvalid={Boolean(fieldErrors.newPassword)}
+              errorMessage={fieldErrors.newPassword}
             />
             <Button color="success" type="submit">
               Update Password
@@ -2785,6 +2925,7 @@ function RegisterPage({ onNavigate, setMessage }) {
   });
   const [authMessage, setAuthMessage] = useState("");
   const [authMessageStatus, setAuthMessageStatus] = useState("danger");
+  const [fieldErrors, setFieldErrors] = useState({});
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
@@ -2795,6 +2936,27 @@ function RegisterPage({ onNavigate, setMessage }) {
   const [resendAvailableIn, setResendAvailableIn] = useState(0);
   const [verificationError, setVerificationError] = useState("");
   const verificationTimerActive = verificationExpiresIn > 0 || resendAvailableIn > 0;
+
+  const setInlineFieldError = (field, message) => {
+    setFieldErrors({ [field]: message });
+    setAuthMessage("");
+    setAuthMessageStatus("danger");
+  };
+
+  const showRegistrationError = (message) => {
+    const text = String(message || "Unable to continue.");
+    if (/email|account.*exists|already exists/i.test(text)) {
+      setFieldErrors({ email: text });
+      setAuthMessage("");
+      return;
+    }
+    if (/verification|verify|code/i.test(text)) {
+      setFieldErrors({ verificationCode: text });
+      setAuthMessage("");
+      return;
+    }
+    setAuthMessage(text);
+  };
 
   useEffect(() => {
     if (!verificationTimerActive) return undefined;
@@ -2813,10 +2975,11 @@ function RegisterPage({ onNavigate, setMessage }) {
     setAuthMessage("");
     setAuthMessageStatus("danger");
     setVerificationError("");
+    setFieldErrors((current) => ({ ...current, email: undefined }));
     const email = validateGmailAddress(form.email);
     if (!email.ok) {
       if (fromModal) setVerificationError(email.message);
-      else setAuthMessage(email.message);
+      else setInlineFieldError("email", email.message);
       return;
     }
     setSendingCode(true);
@@ -2834,7 +2997,7 @@ function RegisterPage({ onNavigate, setMessage }) {
     } catch (err) {
       setAuthMessageStatus("danger");
       if (fromModal) setVerificationError(err.message);
-      else setAuthMessage(err.message);
+      else showRegistrationError(err.message);
     } finally {
       setSendingCode(false);
     }
@@ -2843,23 +3006,28 @@ function RegisterPage({ onNavigate, setMessage }) {
     const code = String(form.verificationCode || "").trim();
     if (!/^\d{6}$/.test(code)) {
       setVerificationError("Enter the complete 6-digit verification code.");
+      setFieldErrors({ verificationCode: "Enter the complete 6-digit verification code." });
       return;
     }
     if (verificationExpiresIn <= 0) {
       setVerificationError("This code has expired. Request a new code.");
+      setFieldErrors({ verificationCode: "This code has expired. Request a new code." });
       return;
     }
     setVerificationError("");
+    setFieldErrors((current) => ({ ...current, verificationCode: undefined }));
     setVerifyingCode(true);
     try {
       await apiVerifyRegistrationCode(form.email, code);
       setEmailVerified(true);
       setVerificationModalOpen(false);
+      setFieldErrors((current) => ({ ...current, verificationCode: undefined }));
       setAuthMessageStatus("success");
       setAuthMessage("Email verified. Complete the form to create your account.");
     } catch (err) {
       setEmailVerified(false);
       setVerificationError(err.message);
+      setFieldErrors({ verificationCode: err.message });
     } finally {
       setVerifyingCode(false);
     }
@@ -2868,20 +3036,29 @@ function RegisterPage({ onNavigate, setMessage }) {
     event.preventDefault();
     setAuthMessage("");
     setAuthMessageStatus("danger");
+    setFieldErrors({});
     if (!form.firstName.trim() || !form.lastName.trim())
       return setAuthMessage("First name and last name are required.");
     const email = validateGmailAddress(form.email);
-    if (!email.ok) return setAuthMessage(email.message);
+    if (!email.ok) return setInlineFieldError("email", email.message);
     const contact = validateContact(form.contact);
-    if (!contact.ok) return setAuthMessage(contact.message);
+    if (!contact.ok) {
+      setFieldErrors({ contact: contact.message });
+      return;
+    }
     const password = validatePassword(form.password);
-    if (!password.ok) return setAuthMessage(password.message);
-    if (form.password !== form.confirmPassword)
-      return setAuthMessage("Confirm password must match password.");
+    if (!password.ok) {
+      setFieldErrors({ password: password.message });
+      return;
+    }
+    if (form.password !== form.confirmPassword) {
+      setFieldErrors({ confirmPassword: "Confirm password must match password." });
+      return;
+    }
     if (!String(form.verificationCode || "").trim())
-      return setAuthMessage("Please enter the email verification code.");
+      return setInlineFieldError("verificationCode", "Send and enter the email verification code first.");
     if (!emailVerified || verificationExpiresIn <= 0)
-      return setAuthMessage("Please verify your email with an active code.");
+      return setInlineFieldError("verificationCode", "Please verify your email with an active code.");
     const address = validateDeliveryAddress(form.address);
     if (!address.ok) return setAuthMessage(address.message);
     try {
@@ -2889,9 +3066,13 @@ function RegisterPage({ onNavigate, setMessage }) {
       setMessage("Account created. Please log in.");
       onNavigate("login");
     } catch (err) {
-      setAuthMessage(err.message);
+      showRegistrationError(err.message);
     }
   };
+  const registerContactValidation = form.contact ? validateContact(form.contact) : { ok: true };
+  const registerContactError = registerContactValidation.ok
+    ? fieldErrors.contact
+    : registerContactValidation.message;
   return (
     <AuthCard
       badge="New customer"
@@ -2924,20 +3105,27 @@ function RegisterPage({ onNavigate, setMessage }) {
           value={form.email}
           onValueChange={(v) => {
             setForm((current) => ({ ...current, email: v, verificationCode: "" }));
+            setFieldErrors((current) => ({ ...current, email: undefined, verificationCode: undefined }));
             setEmailVerified(false);
             setVerificationExpiresIn(0);
             setResendAvailableIn(0);
           }}
           className="sm:col-span-2"
           placeholder="name@gmail.com"
+          isInvalid={Boolean(fieldErrors.email)}
+          errorMessage={fieldErrors.email}
           startContent={<Mail size={18} />}
         />
         <Input
           isRequired
           label="Contact"
           value={form.contact}
-          onValueChange={(v) => setForm({ ...form, contact: v })}
+          onValueChange={(v) => setForm({ ...form, contact: String(v || "").slice(0, 11) })}
           placeholder="09xxxxxxxxx"
+          inputMode="numeric"
+          maxLength={11}
+          isInvalid={Boolean(registerContactError)}
+          errorMessage={registerContactError}
           startContent={<Phone size={18} />}
         />
         <Input
@@ -2946,8 +3134,10 @@ function RegisterPage({ onNavigate, setMessage }) {
           type={showPassword ? "text" : "password"}
           value={form.password}
           onValueChange={(v) => setForm({ ...form, password: v })}
+          isInvalid={Boolean(fieldErrors.password)}
+          errorMessage={fieldErrors.password}
           startContent={<LockKeyhole size={18} />}
-          placeholder="8 characters"
+          placeholder="At least 8 characters"
           endContent={
             <button
               type="button"
@@ -2965,6 +3155,8 @@ function RegisterPage({ onNavigate, setMessage }) {
           type={showConfirmPassword ? "text" : "password"}
           value={form.confirmPassword}
           onValueChange={(v) => setForm({ ...form, confirmPassword: v })}
+          isInvalid={Boolean(fieldErrors.confirmPassword)}
+          errorMessage={fieldErrors.confirmPassword}
           startContent={<LockKeyhole size={18} />}
           className="sm:col-span-2"
           endContent={
@@ -2978,7 +3170,11 @@ function RegisterPage({ onNavigate, setMessage }) {
             </button>
           }
         />
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3 sm:col-span-2">
+        <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-[var(--bg-surface)] p-3 sm:col-span-2 ${
+          fieldErrors.verificationCode
+            ? "border-red-500 shadow-[0_0_0_1px_rgba(248,113,113,.75)]"
+            : "border-[var(--border)]"
+        }`}>
           <div className="flex items-center gap-3">
             <span className={`grid h-10 w-10 place-items-center rounded-lg ${emailVerified && verificationExpiresIn > 0 ? "bg-emerald-400/15 text-[var(--accent-text)]" : "bg-[var(--bg-card-alt)] text-[var(--text-muted)]"}`}>
               <ShieldCheck size={19} />
@@ -3010,6 +3206,11 @@ function RegisterPage({ onNavigate, setMessage }) {
           >
             {verificationExpiresIn > 0 ? "Review Verification" : "Send Verification Code"}
           </Button>
+          {fieldErrors.verificationCode ? (
+            <p className="basis-full text-xs font-semibold text-red-400">
+              {fieldErrors.verificationCode}
+            </p>
+          ) : null}
         </div>
         <DeliveryAddressSelect
           isRequired
@@ -3058,11 +3259,14 @@ function RegisterPage({ onNavigate, setMessage }) {
                         setForm((current) => ({ ...current, verificationCode: code }));
                         setEmailVerified(false);
                         setVerificationError("");
+                        setFieldErrors((current) => ({ ...current, verificationCode: undefined }));
                       }}
                       placeholder="000000"
                       inputMode="numeric"
                       maxLength={6}
                       autoComplete="one-time-code"
+                      isInvalid={Boolean(fieldErrors.verificationCode)}
+                      errorMessage={fieldErrors.verificationCode}
                       startContent={<ShieldCheck size={18} />}
                     />
                     <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3 text-sm">
@@ -3466,7 +3670,7 @@ function CustomerFooter({ isDark }) {
       id="contact"
       className={`border-t px-4 py-14 transition-colors ${isDark ? "border-white/10 bg-[#060a10]" : "border-slate-200 bg-white"}`}
     >
-      <div className="mx-auto grid max-w-6xl gap-10 md:grid-cols-[1.2fr_1fr_1fr]">
+      <div className="mx-auto grid max-w-6xl gap-10 md:grid-cols-[1.2fr_1fr]">
         <div>
           <div className="flex items-center gap-3">
             <img
@@ -3512,30 +3716,6 @@ function CustomerFooter({ isDark }) {
               <Mail size={18} className="text-emerald-300" />
               jazjobeverage@gmail.com
             </span>
-          </div>
-        </div>
-        <div>
-          <h3
-            className={`font-black ${isDark ? "text-white" : "text-slate-950"}`}
-          >
-            Follow Us
-          </h3>
-          <div className="mt-5 flex gap-3">
-            <Tooltip content="Facebook" placement="top" showArrow>
-              <Button aria-label="Facebook" variant="flat" isIconOnly>
-                f
-              </Button>
-            </Tooltip>
-            <Tooltip content="Instagram" placement="top" showArrow>
-              <Button aria-label="Instagram" variant="flat" isIconOnly>
-                ig
-              </Button>
-            </Tooltip>
-            <Tooltip content="TikTok" placement="top" showArrow>
-              <Button aria-label="TikTok" variant="flat" isIconOnly>
-                <MessageCircle size={18} />
-              </Button>
-            </Tooltip>
           </div>
         </div>
       </div>

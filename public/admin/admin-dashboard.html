@@ -5,6 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin Dashboard | Jazjo</title>
   <link rel="stylesheet" href="../assets/css/styles.css" />
+  <style>
+    .dashboardStats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px}
+    .statCard{border:1px solid rgba(229,231,235,.9);background:#fff;border-radius:16px;padding:14px;text-align:left;cursor:pointer;box-shadow:0 10px 24px rgba(15,23,42,.08)}
+    .statCard span{display:block;color:#64748b;font-size:12px;font-weight:900;text-transform:uppercase}
+    .statCard strong{display:block;margin-top:6px;font-size:24px;color:#0f172a}
+    .modalOverlay{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:9999;padding:16px}
+    .modalPanel{width:min(860px,96vw);max-height:88vh;overflow:auto;background:#fff;border-radius:18px;border:1px solid rgba(229,231,235,.9);box-shadow:0 20px 40px rgba(15,23,42,.25)}
+    .modalHead{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-bottom:1px solid rgba(229,231,235,.9)}
+    .modalBody{padding:16px}
+    @media(max-width:900px){.dashboardStats{grid-template-columns:1fr}}
+  </style>
 </head>
 <body>
   <div class="layout">
@@ -41,6 +52,8 @@
         <button class="btn back" onclick="history.back()">← Back</button>
       </div>
 
+      <div class="dashboardStats" id="dashboardStats"></div>
+
       <div class="card">
         <h3 style="margin:0;font-weight:1000;">Recent Orders</h3>
         <table>
@@ -51,6 +64,15 @@
         </table>
       </div>
     </main>
+  </div>
+  <div class="modalOverlay" id="dashboardDetailsModal">
+    <div class="modalPanel">
+      <div class="modalHead">
+        <div id="dashboardModalTitle" style="font-weight:1100;font-size:18px;">Details</div>
+        <button type="button" class="btn2" data-close-dashboard-modal>Close</button>
+      </div>
+      <div class="modalBody" id="dashboardModalBody"></div>
+    </div>
   </div>
   <script defer src="../assets/js/panel-data.js"></script></body>
 </html>

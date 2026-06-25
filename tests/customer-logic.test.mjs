@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildCsvContent,
+  buildCheckoutPrefill,
   calculateDeliveryFee,
   canAddCartQuantity,
   canAccessPanelRoute,
@@ -10,6 +11,8 @@ import {
   canRepayOrder,
   formatCountdown,
   isRetryablePaymentReason,
+  mergeOrdersByOrderNumber,
+  normalizeContactInput,
   normalizeCategory,
   paymentStatusLabel,
   partitionProductsByFavorites,
@@ -19,6 +22,7 @@ import {
   validateDeliveryAddress,
   validatePassword
 } from "../frontend/customer/src/lib/customerLogic.js";
+import { normalizeCustomerProfile } from "../frontend/customer/src/lib/api.js";
 
 test("normalizeCategory maps brand categories into customer groups", () => {
   assert.equal(normalizeCategory("Coke Products", "Coke Sakto"), "Soft Drinks");
@@ -143,7 +147,20 @@ test("canRepayOrder only allows pending unpaid QRPH orders", () => {
 
 test("validateContact requires Philippine mobile format", () => {
   assert.equal(validateContact("09123456789").ok, true);
+  assert.equal(validateContact("12345678901").ok, false);
   assert.equal(validateContact("+639123456789").ok, false);
+  assert.match(validateContact("1").message, /must start with 09/);
+  assert.match(validateContact("0").message, /exactly 11 digits/);
+  assert.match(validateContact("08").message, /must start with 09/);
+  assert.match(validateContact("0912345678").message, /exactly 11 digits/);
+  assert.match(validateContact("091234567890").message, /exactly 11 digits/);
+  assert.match(validateContact("09123abc789").message, /Only numeric/);
+  assert.match(validateContact("08123456789").message, /must start with 09/);
+});
+
+test("normalizeContactInput keeps only the first 11 digits", () => {
+  assert.equal(normalizeContactInput("098723432432432"), "09872343243");
+  assert.equal(normalizeContactInput("09abc872-343 24"), "0987234324");
 });
 
 test("validateDeliveryAddress requires province and city selections", () => {
@@ -161,10 +178,99 @@ test("validateDeliveryAddress requires province and city selections", () => {
   assert.equal(validateDeliveryAddress({ provinceCode: "012800000", provinceName: "Ilocos Norte" }).ok, false);
 });
 
-test("validatePassword requires exactly 8 complex characters", () => {
+test("validatePassword accepts long complex passwords", () => {
   assert.equal(validatePassword("Aa12345!").ok, true);
-  assert.equal(validatePassword("StrongPass1!").ok, false);
+  assert.equal(validatePassword("StrongPass1!@#$%^&*()").ok, true);
   assert.equal(validatePassword("password123").ok, false);
+});
+
+test("buildCheckoutPrefill maps logged-in profile fields to checkout fields", () => {
+  const result = buildCheckoutPrefill({
+    profile: {
+      full_name: "Juan Dela Cruz",
+      email: "juan@gmail.com",
+      contact: "09123456789",
+      address: "12 U, Road 11"
+    }
+  });
+
+  assert.deepEqual(result, {
+    customerName: "Juan Dela Cruz",
+    email: "juan@gmail.com",
+    contact: "09123456789",
+    addressText: "12 U, Road 11"
+  });
+});
+
+test("buildCheckoutPrefill accepts normalized profile fields", () => {
+  const result = buildCheckoutPrefill({
+    fullName: "Angelo Taruc",
+    email: "angelo@gmail.com",
+    contact: "09123456789",
+    address: { fullAddress: "12 U, Road 11" }
+  });
+
+  assert.deepEqual(result, {
+    customerName: "Angelo Taruc",
+    email: "angelo@gmail.com",
+    contact: "09123456789",
+    addressText: "12 U, Road 11"
+  });
+});
+
+test("normalizeCustomerProfile maps API profile wrapper to profile form fields", () => {
+  const result = normalizeCustomerProfile({
+    profile: {
+      full_name: "Angelo Taruc",
+      email: "angelo@gmail.com",
+      contact: "09123456789",
+      address: "12 U, Road 11"
+    }
+  });
+
+  assert.deepEqual(result, {
+    firstName: "Angelo",
+    lastName: "Taruc",
+    fullName: "Angelo Taruc",
+    email: "angelo@gmail.com",
+    contact: "09123456789",
+    address: { fullAddress: "12 U, Road 11" }
+  });
+});
+
+test("mergeOrdersByOrderNumber groups duplicate order rows under one order", () => {
+  const result = mergeOrdersByOrderNumber([
+    {
+      id: "ORD-1",
+      customerName: "Ana",
+      createdAt: "2026-06-25",
+      total: 50,
+      status: "Order Placed",
+      items: [{ name: "C2", qty: 1 }]
+    },
+    {
+      id: "ORD-1",
+      customerName: "Ana",
+      createdAt: "2026-06-25",
+      total: 75,
+      status: "Preparing",
+      items: [{ name: "Water", qty: 2 }]
+    },
+    {
+      id: "ORD-2",
+      customerName: "Ben",
+      createdAt: "2026-06-25",
+      total: 10,
+      status: "Pending Payment",
+      items: [{ name: "Soda", qty: 1 }]
+    }
+  ]);
+
+  assert.equal(result.length, 2);
+  assert.equal(result[0].id, "ORD-1");
+  assert.equal(result[0].total, 125);
+  assert.equal(result[0].status, "Preparing");
+  assert.deepEqual(result[0].items.map((item) => item.name), ["C2", "Water"]);
 });
 
 test("formatCountdown formats verification timers", () => {

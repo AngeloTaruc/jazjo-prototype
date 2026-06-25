@@ -30,7 +30,7 @@ import {
   apiUpdateOrderDetails,
   apiAdminDashboard
 } from "./lib/api.js";
-import { clearSession, createDemandForecast, formatQty, getToken, money, statusLabel } from "./lib/customerLogic.js";
+import { clearSession, createDemandForecast, formatQty, getToken, money, normalizeContactInput, statusLabel } from "./lib/customerLogic.js";
 
 const CardHeader = Card.Header;
 const CardBody = Card.Content;
@@ -459,7 +459,8 @@ function StaffOrdersPage({ setMessage }) {
                   <HeroInput
                     label="Contact"
                     value={editForm?.contact || ""}
-                    onValueChange={(value) => setEditForm((current) => ({ ...current, contact: value }))}
+                    inputMode="numeric"
+                    onValueChange={(value) => setEditForm((current) => ({ ...current, contact: normalizeContactInput(value) }))}
                   />
                 </div>
                 <label className="grid gap-2 text-sm font-semibold text-slate-200">
@@ -595,7 +596,7 @@ function StaffInventoryPage({ setMessage }) {
         <>
           <div className="overflow-x-auto">
             <Table>
-              <THead><Th>PRODUCT</Th><Th>CATEGORY</Th><Th>PRICE</Th><Th>STOCK</Th><Th>STATUS</Th></THead>
+              <THead><Th>PRODUCT</Th><Th>CATEGORY</Th><Th>PRICE</Th><Th>STOCK</Th><Th>QTY/CASE</Th><Th>STATUS</Th></THead>
               <TBody>
                 {paged.map((p, idx) => {
                   const status = p.status || (p.stockCases > 10 ? "In Stock" : p.stockCases > 0 ? "Low Stock" : "Out of Stock");
@@ -605,6 +606,7 @@ function StaffInventoryPage({ setMessage }) {
                       <Td>{p.category || "-"}</Td>
                       <Td>{money(p.price)}</Td>
                       <Td>{formatQty(p.stockCases)} cases</Td>
+                      <Td>{Number(p.quantityPerCase || 1).toLocaleString()}</Td>
                       <Td>
                         <Chip
                           color={status === "In Stock" ? "success" : status === "Low Stock" ? "warning" : "danger"}

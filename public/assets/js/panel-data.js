@@ -327,6 +327,7 @@
     const newProductUnit = document.querySelector("#newProductUnit");
     const newProductPrice = document.querySelector("#newProductPrice");
     const newProductStock = document.querySelector("#newProductStock");
+    const newProductQuantityPerCase = document.querySelector("#newProductQuantityPerCase");
     const newProductImage = document.querySelector("#newProductImage");
     const newProductImagePreview = document.querySelector("#newProductImagePreview");
     const addProductBtn = document.querySelector("#addProductBtn");
@@ -383,11 +384,12 @@
           <td><img class="productThumb" src="${attr(p.image_url || productImagePlaceholder(p.name))}" alt="${attr(p.name)}"></td>
           <td>${esc(p.name)}</td>
           <td>${Number(p.stockCases || 0)}</td>
+          <td>${Number(p.quantityPerCase || 1)}</td>
           <td>${esc(p.status)}</td>
           <td><button class="btn2" type="button" data-edit-name="${attr(p.name)}">Edit</button></td>
         </tr>
       `,
-        emptyRow: `<tr><td colspan="5">No products found</td></tr>`,
+        emptyRow: `<tr><td colspan="6">No products found</td></tr>`,
         onRendered: () => bindInventoryEditButtons(allInventory, renderAdminInventory)
       });
     };
@@ -441,8 +443,13 @@
       const unit = (newProductUnit?.value || "").trim();
       const price = toNum(newProductPrice?.value, 0);
       const stockCases = toNum(newProductStock?.value, 0);
+      const quantityPerCase = toNum(newProductQuantityPerCase?.value, 1);
       if (!name || !category || !unit) {
         showMessage(productMessage, "Name, category, and unit are required.", false);
+        return;
+      }
+      if (!Number.isInteger(quantityPerCase) || quantityPerCase <= 0) {
+        showMessage(productMessage, "Quantity per Case must be a positive integer.", false);
         return;
       }
       try {
@@ -453,12 +460,14 @@
           unit,
           price,
           stockCases,
+          quantityPerCase,
           imageUrl
         });
         showMessage(productMessage, "Product added.");
         if (newProductName) newProductName.value = "";
         if (newProductPrice) newProductPrice.value = "1";
         if (newProductStock) newProductStock.value = "0";
+        if (newProductQuantityPerCase) newProductQuantityPerCase.value = "1";
         if (newProductImage) newProductImage.value = "";
         if (newProductImagePreview) newProductImagePreview.src = productImagePlaceholder("New Product");
         await renderAdminInventory();
@@ -533,6 +542,10 @@
               <input id="editProductStock" type="number" min="0" step="0.5" />
             </div>
             <div class="field">
+              <label>Quantity per Case</label>
+              <input id="editProductQuantityPerCase" type="number" min="1" step="1" />
+            </div>
+            <div class="field">
               <label>Product image</label>
               <div class="imagePicker">
                 <img id="editProductImagePreview" class="imagePreview" alt="Product image preview" />
@@ -563,6 +576,7 @@
     const unitInput = modal.querySelector("#editProductUnit");
     const priceInput = modal.querySelector("#editProductPrice");
     const stockInput = modal.querySelector("#editProductStock");
+    const quantityPerCaseInput = modal.querySelector("#editProductQuantityPerCase");
     const imageInput = modal.querySelector("#editProductImage");
     const preview = modal.querySelector("#editProductImagePreview");
     const clearImageBtn = modal.querySelector("#clearEditProductImage");
@@ -582,6 +596,7 @@
     unitInput.value = item.unit || "";
     priceInput.value = String(item.price ?? 0);
     stockInput.value = String(item.stockCases ?? 0);
+    quantityPerCaseInput.value = String(item.quantityPerCase ?? 1);
     imageInput.value = "";
     preview.src = item.image_url || productImagePlaceholder(item.name);
     showMessage("");
@@ -602,14 +617,19 @@
       const unit = unitInput.value.trim();
       const price = toNum(priceInput.value, 0);
       const stockCases = toNum(stockInput.value, 0);
+      const quantityPerCase = toNum(quantityPerCaseInput.value, 1);
       if (!name || !category || !unit) {
         showMessage("Name, category, and unit are required.", false);
+        return;
+      }
+      if (!Number.isInteger(quantityPerCase) || quantityPerCase <= 0) {
+        showMessage("Quantity per Case must be a positive integer.", false);
         return;
       }
       saveBtn.disabled = true;
       saveBtn.textContent = "Saving...";
       try {
-        const payload = { name, category, unit, price, stockCases };
+        const payload = { name, category, unit, price, stockCases, quantityPerCase };
         const file = imageInput.files?.[0];
         if (file) payload.imageUrl = await uploadProductImageFile(file);
         else if (clearImage) payload.imageUrl = "";
@@ -676,28 +696,46 @@
         downloadCsv(`jazjo-reports-${new Date().toISOString().slice(0, 10)}.csv`, rows);
       });
     }
+    const openPrintableReport = () => {
+      const popup = window.open("", "_blank", "width=900,height=700");
+      if (!popup) return;
+      const generatedAt = new Date().toLocaleString();
+      popup.document.write(`
+        <html><head><title>Jazjo Reports</title>
+        <style>
+          @page{size:A4;margin:14mm}
+          body{font-family:Arial,sans-serif;color:#111827;margin:0}
+          header{border-bottom:2px solid #111827;padding-bottom:10px;margin-bottom:16px}
+          h1{margin:0;font-size:24px}
+          .meta{margin-top:6px;color:#64748b;font-size:12px}
+          table{width:100%;border-collapse:collapse;font-size:12px}
+          th,td{border:1px solid #d1d5db;padding:8px;text-align:left;vertical-align:top}
+          th{background:#f3f4f6;font-weight:800}
+          tfoot td{font-weight:800;background:#f9fafb}
+        </style>
+        </head><body>
+        <header>
+          <h1>Jazjo Reports</h1>
+          <div class="meta">Generated: ${esc(generatedAt)}</div>
+        </header>
+        <table>
+          <thead><tr><th>Report Type</th><th>Coverage</th><th>Status</th></tr></thead>
+          <tbody>
+            ${reports.map((r) => `<tr><td>${esc(r.reportType)}</td><td>${esc(r.coverage)}</td><td>${esc(r.status)}</td></tr>`).join("")}
+          </tbody>
+          <tfoot><tr><td colspan="2">Total report sections</td><td>${reports.length}</td></tr></tfoot>
+        </table>
+        </body></html>
+      `);
+      popup.document.close();
+      popup.focus();
+      popup.print();
+    };
     if (printBtn) {
-      printBtn.addEventListener("click", () => window.print());
+      printBtn.addEventListener("click", openPrintableReport);
     }
     if (pdfBtn) {
-      pdfBtn.addEventListener("click", () => {
-        const popup = window.open("", "_blank", "width=900,height=700");
-        if (!popup) return;
-        popup.document.write(`
-          <html><head><title>Jazjo Reports</title>
-          <style>body{font-family:Arial,sans-serif;padding:24px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f5f5f5}</style>
-          </head><body>
-          <h2>Jazjo Reports</h2>
-          <p>Generated: ${new Date().toLocaleString()}</p>
-          <table><thead><tr><th>Report Type</th><th>Coverage</th><th>Status</th></tr></thead><tbody>
-          ${reports.map((r) => `<tr><td>${esc(r.reportType)}</td><td>${esc(r.coverage)}</td><td>${esc(r.status)}</td></tr>`).join("")}
-          </tbody></table>
-          </body></html>
-        `);
-        popup.document.close();
-        popup.focus();
-        popup.print();
-      });
+      pdfBtn.addEventListener("click", openPrintableReport);
     }
   }
 

@@ -30,7 +30,8 @@ import {
   Eye,
   Sparkles,
   Trash2,
-  Warehouse
+  Warehouse,
+  Printer
 } from "lucide-react";
 import {
   apiAdminDashboard,
@@ -42,6 +43,7 @@ import {
   apiAdminReports,
   apiAdminDelivery,
   apiAdminDeleteOrder,
+  apiAdminBulkDeleteOrdersByStatus,
   apiAdminCategories,
   apiAdminCreateCategory,
   apiAdminDeleteCategory,
@@ -95,6 +97,68 @@ function Td({ children, className = "" }) {
 
 function Table({ children }) {
   return <table className="w-full text-left text-sm">{children}</table>;
+}
+
+function DeliveryTimeline({ status }) {
+  const timelineSteps = ["Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered"];
+  const current = statusLabel(status);
+  const currentIndex = Math.max(0, timelineSteps.indexOf(current));
+  return (
+    <div className="flex items-center gap-3 overflow-x-auto pb-2">
+      {timelineSteps.map((step, idx) => {
+        const done = idx <= currentIndex;
+        return (
+          <div key={step} className="flex min-w-max items-center gap-3">
+            <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ${
+              done ? "bg-emerald-500 text-white" : "bg-white/10 text-slate-500"
+            }`}>
+              {done ? "\u2713" : idx + 1}
+            </div>
+            <span className={`text-sm ${done ? "font-semibold text-emerald-300" : "text-slate-500"}`}>{step}</span>
+            {idx < timelineSteps.length - 1 ? <div className={`h-px w-12 ${done ? "bg-emerald-500/50" : "bg-white/10"}`} /> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function collapseDeliveryTracks(tracks = []) {
+  const byOrder = new Map();
+  for (const track of tracks || []) {
+    const orderId = String(track?.orderId || track?.id || "").trim();
+    if (!orderId) continue;
+    const existing = byOrder.get(orderId);
+    const trackItems = Array.isArray(track.items) && track.items.length
+      ? track.items.map((item) => ({
+        productName: item.productName || item.name || track.productName || "-",
+        name: item.name || item.productName || track.productName || "-",
+        qty: Number(item.qty || 0)
+      }))
+      : [{
+        productName: track.productName || "-",
+        name: track.productName || "-",
+        qty: Number(track.qty || 0)
+      }];
+    if (!existing) {
+      byOrder.set(orderId, {
+        ...track,
+        orderId,
+        items: trackItems,
+        qty: trackItems.reduce((sum, item) => sum + Number(item.qty || 0), 0)
+      });
+      continue;
+    }
+    existing.items = [...(existing.items || []), ...trackItems];
+    existing.qty = Number(existing.qty || 0) + trackItems.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+    existing.productName = `${existing.items.length} items`;
+    existing.updatedAt = track.updatedAt || existing.updatedAt;
+    existing.status = track.status || existing.status;
+  }
+  return [...byOrder.values()].map((track) => ({
+    ...track,
+    productName: track.items?.length > 1 ? `${track.items.length} items` : (track.items?.[0]?.name || track.productName || "-")
+  }));
 }
 
 export default function AdminPanel({ isDark, onToggleTheme }) {
@@ -228,6 +292,7 @@ export default function AdminPanel({ isDark, onToggleTheme }) {
 function AdminDashboardPage({ setMessage }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState(null);
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -252,13 +317,33 @@ function AdminDashboardPage({ setMessage }) {
   }
   const kpis = data?.kpis || {};
   const recentOrders = data?.recentOrders || [];
+  const orders = data?.orders || recentOrders;
+  const customers = data?.customers || [];
+  const todayOrders = data?.todayOrders || orders.filter((order) => String(order.createdAtRaw || order.createdAt || "").slice(0, 10) === new Date().toISOString().slice(0, 10));
+  const lowStockRows = data?.lowStock || [];
+  const detailRows = {
+    orders,
+    customers,
+    todaySales: todayOrders,
+    bestSeller: orders.filter((order) => (order.items || []).some((item) => item.name === kpis.bestSeller)),
+    lowStock: lowStockRows
+  };
+  const detailTitle = {
+    orders: "Order List",
+    customers: "Customer List",
+    todaySales: "Sales Today",
+    bestSeller: "Best Seller Orders",
+    lowStock: "Low Stock Products"
+  };
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard label="Total Sales" value={money(kpis.totalSales)} icon={<TrendingUp size={20} />} />
-        <KpiCard label="Transactions" value={kpis.transactions || 0} icon={<ShoppingCart size={20} />} />
-        <KpiCard label="Best Seller" value={kpis.bestSeller || "N/A"} icon={<BarChart3 size={20} />} />
-        <KpiCard label="Low Stock" value={kpis.lowStockCount || 0} icon={<Warehouse size={20} />} />
+        <KpiCard label="Total Orders" value={kpis.totalOrders ?? kpis.transactions ?? orders.length} icon={<ShoppingCart size={20} />} onPress={() => setDetail("orders")} />
+        <KpiCard label="Total Customers" value={kpis.totalCustomers ?? customers.length} icon={<Users size={20} />} onPress={() => setDetail("customers")} />
+        <KpiCard label="Sales Today" value={money(kpis.salesToday || 0)} icon={<TrendingUp size={20} />} onPress={() => setDetail("todaySales")} />
+        <KpiCard label="Best Seller" value={kpis.bestSeller || "N/A"} icon={<BarChart3 size={20} />} onPress={() => setDetail("bestSeller")} />
+        <KpiCard label="Total Sales" value={money(kpis.totalSales)} icon={<CreditCard size={20} />} />
+        <KpiCard label="Low Stock" value={kpis.lowStockCount || 0} icon={<Warehouse size={20} />} onPress={() => setDetail("lowStock")} />
       </div>
       <Card>
         <CardHeader><h2 className="text-lg font-black">Recent Orders</h2></CardHeader>
@@ -284,6 +369,68 @@ function AdminDashboardPage({ setMessage }) {
           )}
         </CardBody>
       </Card>
+      <Modal isOpen={!!detail} onOpenChange={() => setDetail(null)}>
+        <Modal.Backdrop>
+          <Modal.Container size="3xl">
+            <Modal.Dialog>
+              <Modal.Header>
+                <h2 className="text-lg font-black text-white">{detailTitle[detail] || "Details"}</h2>
+              </Modal.Header>
+              <Modal.Body>
+                <div className="max-h-[60vh] overflow-auto">
+                  {detail === "customers" ? (
+                    <Table>
+                      <THead><Th>NAME</Th><Th>EMAIL</Th><Th>CONTACT</Th></THead>
+                      <TBody>
+                        {(detailRows.customers || []).map((customer, idx) => (
+                          <Tr key={customer.user_id || customer.email || idx}>
+                            <Td>{customer.full_name || customer.name || "Customer"}</Td>
+                            <Td className="text-sm text-slate-400">{customer.email || "-"}</Td>
+                            <Td>{customer.contact || "-"}</Td>
+                          </Tr>
+                        ))}
+                      </TBody>
+                    </Table>
+                  ) : detail === "lowStock" ? (
+                    <Table>
+                      <THead><Th>PRODUCT</Th><Th>STOCK</Th><Th>STATUS</Th></THead>
+                      <TBody>
+                        {(detailRows.lowStock || []).map((product, idx) => (
+                          <Tr key={product.id || product.name || idx}>
+                            <Td>{product.name}</Td>
+                            <Td>{formatQty(product.stockCases)} cases</Td>
+                            <Td>{product.status || "Low Stock"}</Td>
+                          </Tr>
+                        ))}
+                      </TBody>
+                    </Table>
+                  ) : (
+                    <Table>
+                      <THead><Th>ORDER</Th><Th>CUSTOMER</Th><Th>DATE</Th><Th>ITEMS</Th><Th>TOTAL</Th><Th>STATUS</Th></THead>
+                      <TBody>
+                        {(detailRows[detail] || []).map((order, idx) => (
+                          <Tr key={order.id || idx}>
+                            <Td><span className="font-semibold">{order.id}</span></Td>
+                            <Td>{order.customerName || "Customer"}</Td>
+                            <Td className="text-sm text-slate-400">{order.createdAt || "-"}</Td>
+                            <Td className="text-sm text-slate-400">{(order.items || []).map((item) => `${item.name} x${formatQty(item.qty)}`).join(", ") || "-"}</Td>
+                            <Td>{money(order.total)}</Td>
+                            <Td>{statusLabel(order.status)}</Td>
+                          </Tr>
+                        ))}
+                      </TBody>
+                    </Table>
+                  )}
+                  {!(detailRows[detail] || []).length ? <p className="p-3 text-sm text-slate-400">No records found.</p> : null}
+                </div>
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => setDetail(null)}>Close</Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </motion.div>
   );
 }
@@ -385,43 +532,41 @@ function AdminOrdersPage({ setMessage }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [deletingOrder, setDeletingOrder] = useState("");
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const perPage = 10;
   const statuses = ["All", "Pending Payment", "Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered", "Cancelled"];
+  const [pagination, setPagination] = useState({ page: 1, perPage, total: 0, totalPages: 1 });
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await apiAdminOrders();
+      const result = await apiAdminOrders({ page, perPage, status: filter, search });
       setOrders(result.orders || []);
+      setPagination(result.pagination || { page, perPage, total: result.orders?.length || 0, totalPages: 1 });
     } catch (err) {
       setMessage(err.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [filter, page, search]);
   useEffect(() => { load(); }, [load]);
-  const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return orders.filter((order) => {
-      const matchesStatus = filter === "All" || statusLabel(order.status) === filter;
-      if (!matchesStatus) return false;
-      if (!query) return true;
-      const haystack = [
-        order.id,
-        order.customerName,
-        order.contact,
-        order.createdAt,
-        statusLabel(order.status),
-        order.paymentStatus,
-        ...(order.items || []).map((item) => item.name)
-      ].filter(Boolean).join(" ").toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [orders, filter, search]);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
-  const safePage = Math.min(page, totalPages);
-  const paged = filtered.slice((safePage - 1) * perPage, safePage * perPage);
   useEffect(() => { setPage(1); }, [filter, search]);
+  const totalPages = Math.max(1, Number(pagination.totalPages || 1));
+  const safePage = Math.min(page, totalPages);
+  const paged = orders;
+  const canGoPrevious = safePage > 1;
+  const canGoNext = safePage < totalPages;
+  const pageControls = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="flat" isDisabled={!canGoPrevious || loading} onPress={() => setPage((current) => Math.max(1, current - 1))}>
+        Previous
+      </Button>
+      <Chip size="sm" variant="flat">Page {safePage} of {totalPages}</Chip>
+      <Button size="sm" color="success" variant="flat" isDisabled={!canGoNext || loading} onPress={() => setPage((current) => Math.min(totalPages, current + 1))}>
+        Next
+      </Button>
+    </div>
+  );
   const updateStatus = async (orderCode, newStatus) => {
     try {
       await apiUpdateOrderStatus(orderCode, newStatus);
@@ -444,6 +589,36 @@ function AdminOrdersPage({ setMessage }) {
       setDeletingOrder("");
     }
   };
+  const bulkDeleteByStatus = async () => {
+    if (filter === "All") {
+      setMessage("Choose a specific status before bulk deleting orders.");
+      return;
+    }
+    const total = Number(pagination.total || 0);
+    if (!window.confirm(`Delete all ${filter} orders${total ? ` (${total})` : ""}? This cannot be undone.`)) return;
+    setBulkDeleting(true);
+    try {
+      let deletedCount = 0;
+      try {
+        const result = await apiAdminBulkDeleteOrdersByStatus(filter);
+        deletedCount = result.deleted || 0;
+      } catch (err) {
+        if (!/not found|404/i.test(String(err.message || ""))) throw err;
+        const result = await apiAdminOrders({ page: 1, perPage: 10000, status: filter, search: "" });
+        for (const order of result.orders || []) {
+          await apiAdminDeleteOrder(order.id);
+          deletedCount += 1;
+        }
+      }
+      setMessage(`${deletedCount} ${filter} order(s) removed.`);
+      setPage(1);
+      load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
   const nextStatus = (current) => {
     const label = statusLabel(current);
     const map = {
@@ -460,9 +635,11 @@ function AdminOrdersPage({ setMessage }) {
         <CardBody className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-black">Order Management</h2>
-            <p className="text-sm text-slate-400">{filtered.length} of {orders.length} order(s)</p>
+            <p className="text-sm text-slate-400">
+              {pagination.total || 0} order(s) - Page {safePage} of {totalPages}
+            </p>
           </div>
-          <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[420px] sm:flex-row sm:items-center">
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[520px] sm:flex-row sm:items-center">
             <HeroInput
               aria-label="Search orders"
               placeholder="Search order ID, customer, item..."
@@ -472,6 +649,17 @@ function AdminOrdersPage({ setMessage }) {
               size="sm"
             />
             <Button size="sm" variant="flat" startContent={<RefreshCw size={14} />} onPress={load}>Refresh</Button>
+            <Button
+              size="sm"
+              color="danger"
+              variant="flat"
+              startContent={<Trash2 size={14} />}
+              isDisabled={filter === "All" || bulkDeleting || !pagination.total}
+              isLoading={bulkDeleting}
+              onPress={bulkDeleteByStatus}
+            >
+              Delete {filter === "All" ? "by Status" : filter}
+            </Button>
           </div>
         </CardBody>
       </Card>
@@ -490,6 +678,12 @@ function AdminOrdersPage({ setMessage }) {
         <Card><CardBody><p className="text-sm text-slate-400">No orders found.</p></CardBody></Card>
       ) : (
         <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-slate-400">
+              Showing {(safePage - 1) * perPage + 1}-{Math.min(safePage * perPage, Number(pagination.total || 0))} of {pagination.total || 0}
+            </p>
+            {pageControls}
+          </div>
           <div className="overflow-x-auto">
             <Table>
               <THead><Th>ORDER ID</Th><Th>DATE</Th><Th>CUSTOMER</Th><Th>TOTAL</Th><Th>STATUS</Th><Th>ACTION</Th></THead>
@@ -540,11 +734,9 @@ function AdminOrdersPage({ setMessage }) {
               </TBody>
             </Table>
           </div>
-          {totalPages > 1 ? (
-            <div className="flex justify-center">
-              <Pagination total={totalPages} page={safePage} onChange={setPage} color="success" size="sm" showControls showShadow />
-            </div>
-          ) : null}
+          <div className="flex justify-center">
+            {pageControls}
+          </div>
         </>
       )}
       <Modal isOpen={!!selectedOrder} onOpenChange={() => setSelectedOrder(null)}>
@@ -630,7 +822,7 @@ function AdminInventoryPage({ setMessage }) {
   const [addCategoryName, setAddCategoryName] = useState("");
   const [deletingCategory, setDeletingCategory] = useState("");
   const [showRestock, setShowRestock] = useState(false);
-  const [newProduct, setNewProduct] = useState({ name: "", category: "", unit: "case", price: "", stockCases: "" });
+  const [newProduct, setNewProduct] = useState({ name: "", category: "", unit: "case", price: "", stockCases: "", quantityPerCase: "1" });
   const [productImagePreview, setProductImagePreview] = useState("");
   const [productImageFile, setProductImageFile] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -644,7 +836,7 @@ function AdminInventoryPage({ setMessage }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [result, ordersResult] = await Promise.all([apiAdminInventory(), apiAdminOrders()]);
+      const [result, ordersResult] = await Promise.all([apiAdminInventory(), apiAdminOrders({ perPage: 500 })]);
       setInventory(result.inventory || []);
       setLowStock(result.lowStock || []);
       setCategories(result.categories || []);
@@ -703,6 +895,8 @@ function AdminInventoryPage({ setMessage }) {
   };
   const addProduct = async () => {
     if (!newProduct.name.trim() || !newProduct.category) return setMessage("Product name and category are required.");
+    const quantityPerCase = Number(newProduct.quantityPerCase || 1);
+    if (!Number.isInteger(quantityPerCase) || quantityPerCase <= 0) return setMessage("Quantity per Case must be a positive integer.");
     setUploading(true);
     try {
       let imageUrl = "";
@@ -716,9 +910,10 @@ function AdminInventoryPage({ setMessage }) {
         unit: newProduct.unit || "case",
         price: Number(newProduct.price) || 0,
         stockCases: Number(newProduct.stockCases) || 0,
+        quantityPerCase,
         imageUrl: imageUrl || undefined
       });
-      setNewProduct({ name: "", category: "", unit: "case", price: "", stockCases: "" });
+      setNewProduct({ name: "", category: "", unit: "case", price: "", stockCases: "", quantityPerCase: "1" });
       setProductImagePreview("");
       setProductImageFile(null);
       setMessage(`Product "${newProduct.name}" created.`);
@@ -776,6 +971,11 @@ function AdminInventoryPage({ setMessage }) {
       body.unit = showEditProduct.unit || "case";
       body.price = Number(showEditProduct.price) || 0;
       body.stockCases = Number(showEditProduct.stockCases) || 0;
+      body.quantityPerCase = Number(showEditProduct.quantityPerCase) || 1;
+      if (!Number.isInteger(body.quantityPerCase) || body.quantityPerCase <= 0) {
+        setMessage("Quantity per Case must be a positive integer.");
+        return;
+      }
       body.imageUrl = imageUrl;
       body.isActive = showEditProduct.isActive;
       await apiAdminUpdateProduct(editOriginalName, body);
@@ -876,6 +1076,17 @@ function AdminInventoryPage({ setMessage }) {
                 onChange={(e) => setNewProduct({ ...newProduct, stockCases: e.target.value })}
               />
             </label>
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-300">
+              <span>Quantity per Case</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                className="min-h-11 w-full rounded-xl border border-white/10 bg-white/[.06] px-3 text-sm text-slate-50 outline-none"
+                value={newProduct.quantityPerCase}
+                onChange={(e) => setNewProduct({ ...newProduct, quantityPerCase: e.target.value })}
+              />
+            </label>
           </div>
           <div className="flex flex-wrap items-end gap-4">
             <div className="flex-1">
@@ -886,7 +1097,7 @@ function AdminInventoryPage({ setMessage }) {
               </label>
             </div>
             {productImagePreview ? (
-              <img src={productImagePreview} alt="" className="h-16 w-16 shrink-0 rounded-xl border border-white/10 object-cover" />
+              <img src={productImagePreview} alt="" className="h-16 w-16 shrink-0 rounded-xl border border-white/10 bg-transparent object-contain" />
             ) : null}
             <Button color="success" onPress={addProduct} isLoading={uploading}>
               {uploading ? "Uploading..." : "Add Product"}
@@ -907,13 +1118,13 @@ function AdminInventoryPage({ setMessage }) {
         <>
           <div className="overflow-x-auto">
             <Table>
-              <THead><Th>IMAGE</Th><Th>PRODUCT</Th><Th>CATEGORY</Th><Th>PRICE</Th><Th>STOCK</Th><Th>STATUS</Th><Th>ACTION</Th></THead>
+              <THead><Th>IMAGE</Th><Th>PRODUCT</Th><Th>CATEGORY</Th><Th>PRICE</Th><Th>STOCK</Th><Th>QTY/CASE</Th><Th>STATUS</Th><Th>ACTION</Th></THead>
               <TBody>
                 {paged.map((p, idx) => (
                   <Tr key={p.id || p.sku || idx}>
                     <Td>
                       {p.image_url ? (
-                        <img src={p.image_url} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                        <img src={p.image_url} alt="" className="h-10 w-10 rounded-lg bg-transparent object-contain" />
                       ) : (
                         <div className="grid h-10 w-10 place-items-center rounded-lg bg-white/5 text-[10px] text-slate-500">{p.name?.charAt(0) || "?"}</div>
                       )}
@@ -922,6 +1133,7 @@ function AdminInventoryPage({ setMessage }) {
                     <Td>{p.category || "-"}</Td>
                     <Td>{money(p.price)}</Td>
                     <Td>{formatQty(p.stockCases)} cases</Td>
+                    <Td>{Number(p.quantityPerCase || 1).toLocaleString()}</Td>
                     <Td>
                       <Chip
                         color={p.status === "In Stock" ? "success" : p.status === "Low Stock" ? "warning" : "danger"}
@@ -1069,9 +1281,9 @@ function AdminInventoryPage({ setMessage }) {
               <Modal.Body className="space-y-4">
                 <div className="flex items-center gap-4">
                   {editImagePreview ? (
-                    <img src={editImagePreview} alt="" className="h-16 w-16 shrink-0 rounded-xl border border-white/10 object-cover" />
+                    <img src={editImagePreview} alt="" className="h-16 w-16 shrink-0 rounded-xl border border-white/10 bg-transparent object-contain" />
                   ) : showEditProduct?.image_url ? (
-                    <img src={showEditProduct.image_url} alt="" className="h-16 w-16 shrink-0 rounded-xl border border-white/10 object-cover" onError={(e) => { e.target.style.display = "none" }} />
+                    <img src={showEditProduct.image_url} alt="" className="h-16 w-16 shrink-0 rounded-xl border border-white/10 bg-transparent object-contain" onError={(e) => { e.target.style.display = "none" }} />
                   ) : (
                     <div className="grid h-16 w-16 shrink-0 place-items-center rounded-xl bg-white/5 text-lg font-bold text-slate-500">{showEditProduct?.name?.charAt(0) || "?"}</div>
                   )}
@@ -1100,6 +1312,7 @@ function AdminInventoryPage({ setMessage }) {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <HeroInput label="Price" type="number" value={showEditProduct?.price ?? ""} onChange={(e) => setShowEditProduct({ ...showEditProduct, price: Number(e.target.value) })} startContent={<span className="text-xs text-slate-500">PHP</span>} />
                   <HeroInput label="Stock (cases)" type="number" value={showEditProduct?.stockCases ?? ""} onChange={(e) => setShowEditProduct({ ...showEditProduct, stockCases: Number(e.target.value) })} />
+                  <HeroInput label="Quantity per Case" type="number" min="1" value={showEditProduct?.quantityPerCase ?? 1} onChange={(e) => setShowEditProduct({ ...showEditProduct, quantityPerCase: e.target.value })} />
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-semibold text-slate-300">Product image</p>
@@ -1153,6 +1366,7 @@ function AdminDeliveryPage({ setMessage }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const [selectedDelivery, setSelectedDelivery] = useState(null);
   const perPage = 10;
   const load = useCallback(async () => {
     try {
@@ -1170,11 +1384,29 @@ function AdminDeliveryPage({ setMessage }) {
     const interval = setInterval(load, 8000);
     return () => clearInterval(interval);
   }, []);
-  const tracks = data?.productTracks || [];
-  const activeOrder = data?.activeOrder;
+  const tracks = collapseDeliveryTracks(data?.productTracks || []);
   const totalPages = Math.max(1, Math.ceil(tracks.length / perPage));
   const safePage = Math.min(page, totalPages);
   const paged = tracks.slice((safePage - 1) * perPage, safePage * perPage);
+  const selectedOrderMatches = selectedDelivery
+    ? tracks.filter((track) => String(track.orderId) === String(selectedDelivery.orderId))
+    : [];
+  const selectedOrderItems = selectedOrderMatches.length
+    ? selectedOrderMatches.flatMap((track) => track.items?.length ? track.items : [track])
+    : selectedDelivery ? [selectedDelivery] : [];
+  const canGoPrevious = safePage > 1;
+  const canGoNext = safePage < totalPages;
+  const pageControls = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="flat" isDisabled={!canGoPrevious || loading} onPress={() => setPage((current) => Math.max(1, current - 1))}>
+        Previous
+      </Button>
+      <Chip size="sm" variant="flat">Page {safePage} of {totalPages}</Chip>
+      <Button size="sm" color="success" variant="flat" isDisabled={!canGoNext || loading} onPress={() => setPage((current) => Math.min(totalPages, current + 1))}>
+        Next
+      </Button>
+    </div>
+  );
   if (loading) {
     return (
       <div className="space-y-5">
@@ -1183,35 +1415,8 @@ function AdminDeliveryPage({ setMessage }) {
       </div>
     );
   }
-  const timelineSteps = ["Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered"];
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      {activeOrder ? (
-        <Card>
-          <CardHeader><h2 className="text-lg font-black">Active Delivery</h2></CardHeader>
-          <CardBody>
-            <p className="text-sm text-slate-400 mb-4">Order: <strong>{activeOrder.id || "Active order"}</strong></p>
-            <div className="flex items-center gap-3 overflow-x-auto pb-2">
-              {timelineSteps.map((step, idx) => {
-                const current = statusLabel(activeOrder.status);
-                const stepIdx = timelineSteps.indexOf(current);
-                const done = idx <= stepIdx;
-                return (
-                  <div key={step} className="flex items-center gap-3 min-w-max">
-                    <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ${
-                      done ? "bg-emerald-500 text-white" : "bg-white/10 text-slate-500"
-                    }`}>
-                      {done ? "\u2713" : idx + 1}
-                    </div>
-                    <span className={`text-sm ${done ? "text-emerald-300 font-semibold" : "text-slate-500"}`}>{step}</span>
-                    {idx < timelineSteps.length - 1 ? <div className={`h-px w-12 ${done ? "bg-emerald-500/50" : "bg-white/10"}`} /> : null}
-                  </div>
-                );
-              })}
-            </div>
-          </CardBody>
-        </Card>
-      ) : null}
       <Card>
         <CardHeader className="justify-between">
           <h2 className="text-lg font-black">Product Delivery Tracking</h2>
@@ -1227,12 +1432,21 @@ function AdminDeliveryPage({ setMessage }) {
             <>
               <div className="overflow-x-auto">
                 <Table>
-                  <THead><Th>ORDER</Th><Th>PRODUCT</Th><Th>QTY</Th><Th>CUSTOMER</Th><Th>STATUS</Th><Th>UPDATED</Th></THead>
+                  <THead><Th>ORDER</Th><Th>PRODUCT</Th><Th>QTY</Th><Th>CUSTOMER</Th><Th>STATUS</Th><Th>UPDATED</Th><Th>ACTION</Th></THead>
                   <TBody>
                     {paged.map((track, idx) => (
                       <Tr key={idx}>
                         <Td><span className="font-semibold">{track.orderId}</span></Td>
-                        <Td>{track.productName}</Td>
+                          <Td>
+                            <div className="flex flex-col gap-1">
+                              <span className="font-semibold">{track.productName}</span>
+                              {track.items?.length > 1 ? (
+                                <span className="text-xs text-slate-400">
+                                  {track.items.map((item) => item.name || item.productName).filter(Boolean).join(", ")}
+                                </span>
+                              ) : null}
+                            </div>
+                          </Td>
                         <Td>{formatQty(track.qty)}</Td>
                         <Td>{track.customerName}</Td>
                         <Td>
@@ -1245,20 +1459,77 @@ function AdminDeliveryPage({ setMessage }) {
                           </Chip>
                         </Td>
                         <Td className="text-sm text-slate-400">{track.updatedAt || "-"}</Td>
+                        <Td>
+                          <Button size="sm" variant="flat" onPress={() => setSelectedDelivery(track)}>
+                            Details
+                          </Button>
+                        </Td>
                       </Tr>
                     ))}
                   </TBody>
                 </Table>
               </div>
-              {totalPages > 1 ? (
-                <div className="mt-4 flex justify-center">
-                  <Pagination total={totalPages} page={safePage} onChange={setPage} color="success" size="sm" showControls showShadow />
-                </div>
-              ) : null}
+              {totalPages > 1 ? <div className="mt-4 flex justify-center">{pageControls}</div> : null}
             </>
           )}
         </CardBody>
       </Card>
+      <Modal isOpen={!!selectedDelivery} onOpenChange={() => setSelectedDelivery(null)}>
+        <Modal.Backdrop>
+          <Modal.Container size="lg">
+            <Modal.Dialog>
+              <Modal.Header>
+                <div>
+                  <p className="text-xs font-bold uppercase text-emerald-300">Delivery Details</p>
+                  <h2 className="text-lg font-black text-white">Order {selectedDelivery?.orderId}</h2>
+                </div>
+              </Modal.Header>
+              <Modal.Body className="space-y-4">
+                <Card className="border border-white/10 bg-white/[.04]">
+                  <CardBody className="gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold uppercase text-slate-500">Order Progress</p>
+                        <p className="text-sm text-slate-300">Order: <strong>{selectedDelivery?.orderId || "-"}</strong></p>
+                      </div>
+                      <Chip
+                        color={statusLabel(selectedDelivery?.status) === "Delivered" ? "success" : statusLabel(selectedDelivery?.status) === "Cancelled" ? "danger" : "warning"}
+                        variant="flat"
+                      >
+                        {statusLabel(selectedDelivery?.status)}
+                      </Chip>
+                    </div>
+                    <DeliveryTimeline status={selectedDelivery?.status} />
+                  </CardBody>
+                </Card>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <DetailBlock label="Recipient Name" value={selectedDelivery?.recipientName || selectedDelivery?.customerName || "-"} />
+                  <DetailBlock label="Contact Number" value={selectedDelivery?.contact || selectedDelivery?.recipientContact || "-"} />
+                  <DetailBlock label="Delivery Status" value={statusLabel(selectedDelivery?.status)} />
+                  <DetailBlock label="Delivery Date" value={selectedDelivery?.deliveryDate || selectedDelivery?.updatedAt || "-"} />
+                </div>
+                <DetailBlock label="Delivery Address" value={selectedDelivery?.deliveryAddress || selectedDelivery?.address || "-"} />
+                <Card className="border border-white/10 bg-white/[.04]">
+                  <CardBody className="gap-3">
+                    <p className="text-xs font-bold uppercase text-slate-500">Items</p>
+                    <div className="grid gap-2">
+                      {selectedOrderItems.map((item, idx) => (
+                        <div key={`${item?.orderId || "order"}-${item?.productName || idx}`} className="flex items-center justify-between gap-3 rounded-xl bg-black/20 px-3 py-2">
+                          <span className="font-semibold text-white">{item?.productName || "-"}</span>
+                          <Chip size="sm" variant="flat">x{formatQty(item?.qty || 0)}</Chip>
+                        </div>
+                      ))}
+                    </div>
+                  </CardBody>
+                </Card>
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => setSelectedDelivery(null)}>Close</Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </motion.div>
   );
 }
@@ -1453,51 +1724,74 @@ function AdminReportsPage({ setMessage }) {
     URL.revokeObjectURL(url);
     setMessage("Excel export downloaded.");
   };
-  const openPrintableReport = (autoPrint = true) => {
+  const escapeHtml = (value) => String(value ?? "").replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[char]));
+  const buildPrintableReportHtml = () => {
     const rows = reports.map((report) => `
       <tr>
-        <td>${String(report.reportType || "")}</td>
-        <td>${String(report.coverage || "")}</td>
-        <td>${String(report.status || "")}</td>
+        <td>${escapeHtml(report.reportType)}</td>
+        <td>${escapeHtml(report.coverage)}</td>
+        <td>${escapeHtml(report.status)}</td>
       </tr>
     `).join("");
-    const popup = window.open("", "_blank", "noopener,noreferrer");
-    if (!popup) {
-      setMessage("Allow popups to export PDF.");
-      return;
-    }
-    popup.document.write(`
+    return `
       <html>
         <head>
           <title>Jazjo Reports</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 32px; color: #111827; }
-            h1 { margin: 0 0 8px; }
-            p { color: #475569; }
-            table { width: 100%; border-collapse: collapse; margin-top: 24px; }
-            th, td { border: 1px solid #cbd5e1; padding: 10px; text-align: left; }
-            th { background: #f1f5f9; }
+            @page { size: A4; margin: 14mm; }
+            body { font-family: Arial, sans-serif; color: #111827; margin: 0; }
+            header { border-bottom: 2px solid #111827; padding-bottom: 10px; margin-bottom: 18px; }
+            h1 { margin: 0; font-size: 24px; }
+            p { color: #475569; margin: 6px 0 0; font-size: 12px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 12px; }
+            th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; vertical-align: top; }
+            th { background: #f1f5f9; font-weight: 800; }
+            tfoot td { background: #f8fafc; font-weight: 800; }
           </style>
         </head>
         <body>
-          <h1>Jazjo Reports</h1>
-          <p>Generated ${new Date().toLocaleString()}</p>
+          <header>
+            <h1>Jazjo Reports</h1>
+            <p>Generated ${escapeHtml(new Date().toLocaleString())}</p>
+          </header>
           <table>
             <thead><tr><th>Report Type</th><th>Coverage</th><th>Status</th></tr></thead>
             <tbody>${rows || "<tr><td colspan=\"3\">No reports available.</td></tr>"}</tbody>
+            <tfoot><tr><td colspan="2">Total report sections</td><td>${reports.length}</td></tr></tfoot>
           </table>
         </body>
       </html>
-    `);
-    popup.document.close();
-    if (autoPrint) popup.print();
+    `;
+  };
+  const openPrintableReport = () => {
+    const iframe = document.createElement("iframe");
+    iframe.title = "Printable Jazjo Reports";
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "0";
+    iframe.srcdoc = buildPrintableReportHtml();
+    iframe.onload = () => {
+      const printWindow = iframe.contentWindow;
+      if (!printWindow) {
+        iframe.remove();
+        setMessage("Error: Unable to prepare print view.");
+        return;
+      }
+      printWindow.focus();
+      printWindow.print();
+      setTimeout(() => iframe.remove(), 1000);
+    };
+    document.body.appendChild(iframe);
   };
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="flex flex-wrap gap-3">
-        <Button variant="flat" startContent={<BarChart3 size={14} />} onPress={() => openPrintableReport(true)}>PDF Export</Button>
+        <Button variant="flat" startContent={<BarChart3 size={14} />} onPress={openPrintableReport}>PDF Export</Button>
         <Button variant="flat" startContent={<BarChart3 size={14} />} onPress={exportExcel}>Excel Export</Button>
-        <Button variant="flat" startContent={<BarChart3 size={14} />} onPress={() => openPrintableReport(true)}>Print</Button>
+        <Button variant="flat" startContent={<Printer size={14} />} onPress={openPrintableReport}>Print</Button>
       </div>
       <Card>
         <CardHeader><h2 className="text-lg font-black">Reports</h2></CardHeader>
@@ -1528,17 +1822,35 @@ function AdminReportsPage({ setMessage }) {
   );
 }
 
-function KpiCard({ label, value, icon }) {
+function KpiCard({ label, value, icon, onPress }) {
+  const content = (
+    <CardBody className="flex-row items-center gap-4">
+      <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-400/15 text-emerald-300">
+        {icon}
+      </div>
+      <div className="min-w-0 text-left">
+        <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
+        <p className="mt-1 truncate text-xl font-black">{value}</p>
+      </div>
+    </CardBody>
+  );
   return (
-    <Card>
-      <CardBody className="flex-row items-center gap-4">
-        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-400/15 text-emerald-300">
-          {icon}
-        </div>
-        <div className="min-w-0">
-          <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
-          <p className="mt-1 truncate text-xl font-black">{value}</p>
-        </div>
+    <Card className={onPress ? "transition hover:border-emerald-400/40 hover:bg-emerald-400/[.04]" : ""}>
+      {onPress ? (
+        <button type="button" className="w-full text-left" onClick={onPress}>
+          {content}
+        </button>
+      ) : content}
+    </Card>
+  );
+}
+
+function DetailBlock({ label, value }) {
+  return (
+    <Card className="border border-white/10 bg-white/[.04]">
+      <CardBody className="gap-1">
+        <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
+        <p className="font-semibold text-white">{value || "-"}</p>
       </CardBody>
     </Card>
   );

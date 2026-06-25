@@ -25,7 +25,11 @@ test("inventory panels show ARIMA forecast summaries", () => {
 test("admin report export buttons have PDF and Excel actions", () => {
   assert.match(adminSource, /exportExcel/);
   assert.match(adminSource, /buildCsvContent/);
+  assert.match(adminSource, /buildPrintableReportHtml/);
   assert.match(adminSource, /openPrintableReport/);
+  assert.match(adminSource, /document\.createElement\("iframe"\)/);
+  assert.match(adminSource, /iframe\.srcdoc = buildPrintableReportHtml\(\)/);
+  assert.doesNotMatch(adminSource, /window\.open\("", "_blank", "noopener,noreferrer"\)/);
   assert.match(adminSource, /download = `jazjo-reports-/);
 });
 
