@@ -462,7 +462,7 @@ function AdminSalesPage({ setMessage }) {
   }
   const kpis = data?.kpis || {};
   const chart = data?.chart || {};
-  const rows = data?.rows || [];
+  const dailyRows = data?.dailyRows || [];
   const maxChartSales = Math.max(...(chart.points || []).map((x) => Number(x.sales || 0)), 1);
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
@@ -482,9 +482,10 @@ function AdminSalesPage({ setMessage }) {
                 const sales = Number(p.sales || 0);
                 const h = sales > 0 ? Math.max((sales / maxChartSales) * 100, 12) : 4;
                 return (
-                  <Tooltip key={p.key || idx} content={`${p.label}: ${money(p.sales)}`} placement="top" showArrow>
-                    <div className="flex h-44 min-w-0 flex-col items-center justify-end gap-2" aria-label={`${p.label} sales ${money(sales)}`}>
+                  <Tooltip key={p.key || idx} content={`${p.date || p.label}: ${money(p.sales)} - ${p.orders || 0} order(s)`} placement="top" showArrow>
+                    <div className="flex h-44 min-w-0 flex-col items-center justify-end gap-2" aria-label={`${p.label} sales ${money(sales)} from ${p.orders || 0} orders`}>
                       <span className="w-full truncate text-center text-[10px] font-semibold text-emerald-200">{money(sales)}</span>
+                      <span className="w-full truncate text-center text-[10px] font-semibold text-slate-400">{p.orders || 0} order(s)</span>
                       <div className="chart-bar-track flex h-32 w-full items-end overflow-hidden rounded-t-lg bg-white/[.04]">
                         <div className="w-full rounded-t-lg bg-emerald-400 shadow-lg shadow-emerald-950/30 transition-all hover:bg-emerald-300" style={{ height: `${h}%` }} />
                       </div>
@@ -498,21 +499,20 @@ function AdminSalesPage({ setMessage }) {
         </Card>
       ) : null}
       <Card>
-        <CardHeader><h2 className="text-lg font-black">Sales Summary</h2></CardHeader>
+        <CardHeader><h2 className="text-lg font-black">Daily Sales by Date</h2></CardHeader>
         <CardBody>
-          {rows.length === 0 ? (
+          {dailyRows.length === 0 ? (
             <p className="text-sm text-slate-400">No data available.</p>
           ) : (
             <div className="overflow-x-auto">
               <Table>
-                <THead><Th>PERIOD</Th><Th>SALES</Th><Th>TRANSACTIONS</Th><Th>BEST SELLER</Th></THead>
+                <THead><Th>DATE</Th><Th>TOTAL ORDERS</Th><Th>SALES</Th></THead>
                 <TBody>
-                  {rows.map((row, idx) => (
+                  {dailyRows.map((row, idx) => (
                     <Tr key={idx}>
-                      <Td><span className="font-semibold">{row.period}</span></Td>
+                      <Td><span className="font-semibold">{row.date || row.label}</span></Td>
+                      <Td>{row.orders || 0}</Td>
                       <Td>{money(row.sales)}</Td>
-                      <Td>{row.transactions}</Td>
-                      <Td>{row.bestSeller || "N/A"}</Td>
                     </Tr>
                   ))}
                 </TBody>

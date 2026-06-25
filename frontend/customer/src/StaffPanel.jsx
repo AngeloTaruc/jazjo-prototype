@@ -27,8 +27,7 @@ import {
   apiStaffInventory,
   apiStaffDelivery,
   apiUpdateOrderStatus,
-  apiUpdateOrderDetails,
-  apiAdminDashboard
+  apiUpdateOrderDetails
 } from "./lib/api.js";
 import { clearSession, createDemandForecast, formatQty, getToken, money, normalizeContactInput, statusLabel } from "./lib/customerLogic.js";
 
@@ -243,11 +242,24 @@ export default function StaffPanel({ isDark, onToggleTheme }) {
 function StaffDashboardPage({ setMessage }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState(null);
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await apiAdminDashboard();
-      setData(result);
+      const [ordersResult, inventoryResult] = await Promise.all([apiStaffOrders(), apiStaffInventory()]);
+      const orders = ordersResult.orders || [];
+      const lowStock = inventoryResult.lowStock || (inventoryResult.inventory || []).filter((item) => {
+        const stockCases = Number(item.stockCases || 0);
+        return stockCases <= 10;
+      });
+      setData({
+        orders: orders,
+        recentOrders: orders.slice(0, 8),
+        lowStock: lowStock,
+        kpis: {
+          lowStockCount: lowStock.length
+        }
+      });
     } catch (err) {
       setMessage(err.message);
     } finally {
@@ -266,13 +278,26 @@ function StaffDashboardPage({ setMessage }) {
   }
   const kpis = data?.kpis || {};
   const recentOrders = data?.recentOrders || [];
+  const allOrders = data?.orders || recentOrders;
+  const lowStock = data?.lowStock || [];
+  const prepareOrders = allOrders.filter((o) => statusLabel(o.status) === "Preparing");
+  const deliverOrders = allOrders.filter((o) => ["In Transit", "Out for Delivery"].includes(statusLabel(o.status)));
+  const completedOrders = allOrders.filter((o) => statusLabel(o.status) === "Delivered");
+  const detailConfig = {
+    prepare: { title: "Orders to Prepare", items: prepareOrders, type: "orders" },
+    deliver: { title: "Orders to Deliver", items: deliverOrders, type: "orders" },
+    completed: { title: "Completed Orders", items: completedOrders, type: "orders" },
+    lowStock: { title: "Low Stock Items", items: lowStock, type: "inventory" }
+  };
+  const activeDetail = detailConfig[detail] || null;
+  const detailItems = activeDetail?.items || [];
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard label="Orders to Prepare" value={recentOrders.filter((o) => statusLabel(o.status) === "Preparing").length} icon={<Package size={20} />} />
-        <KpiCard label="Orders to Deliver" value={recentOrders.filter((o) => statusLabel(o.status) === "In Transit" || statusLabel(o.status) === "Out for Delivery").length} icon={<Truck size={20} />} />
-        <KpiCard label="Completed Orders" value={recentOrders.filter((o) => statusLabel(o.status) === "Delivered").length} icon={<ShoppingCart size={20} />} />
-        <KpiCard label="Low Stock Items" value={kpis.lowStockCount || 0} icon={<Warehouse size={20} />} />
+        <KpiCard label="Orders to Prepare" value={prepareOrders.length} icon={<Package size={20} />} onPress={() => setDetail("prepare")} />
+        <KpiCard label="Orders to Deliver" value={deliverOrders.length} icon={<Truck size={20} />} onPress={() => setDetail("deliver")} />
+        <KpiCard label="Completed Orders" value={completedOrders.length} icon={<ShoppingCart size={20} />} onPress={() => setDetail("completed")} />
+        <KpiCard label="Low Stock Items" value={kpis.lowStockCount || lowStock.length || 0} icon={<Warehouse size={20} />} onPress={() => setDetail("lowStock")} />
       </div>
       <Card>
         <CardHeader><h2 className="text-lg font-black">Quick Actions</h2></CardHeader>
@@ -282,6 +307,57 @@ function StaffDashboardPage({ setMessage }) {
           <Button color="warning" variant="flat" startContent={<Warehouse size={16} />} onPress={() => go("staff/inventory")}>View Inventory</Button>
         </CardBody>
       </Card>
+      <Modal isOpen={!!detail} onOpenChange={() => setDetail(null)}>
+        <Modal.Backdrop>
+          <Modal.Container size="2xl">
+            <Modal.Dialog>
+              <Modal.Header>
+                <div>
+                  <p className="text-xs font-bold uppercase text-amber-300">Staff Dashboard Details</p>
+                  <h2 className="text-lg font-black text-white">{activeDetail?.title || "Details"}</h2>
+                </div>
+              </Modal.Header>
+              <Modal.Body>
+                {detailItems.length === 0 ? (
+                  <p className="text-sm text-slate-400">No records found.</p>
+                ) : (
+                  <div className="grid gap-2">
+                    {detailItems.map((item, idx) => (
+                      <div key={item.id || item.sku || item.name || idx} className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                        {activeDetail?.type === "inventory" ? (
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <p className="font-semibold text-white">{item.name || "Product"}</p>
+                              <p className="text-xs text-slate-500">{item.category || "-"} - {formatQty(item.stockCases)} case(s)</p>
+                            </div>
+                            <Chip color={Number(item.stockCases || 0) <= 0 ? "danger" : "warning"} variant="flat" size="sm">
+                              {item.status || (Number(item.stockCases || 0) <= 0 ? "Out of Stock" : "Low Stock")}
+                            </Chip>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <p className="font-semibold text-white">{item.id || "Order"}</p>
+                              <p className="text-xs text-slate-500">{item.customerName || "Customer"} - {item.createdAt || "No date"}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Chip color="warning" variant="flat" size="sm">{statusLabel(item.status)}</Chip>
+                              <span className="text-sm font-semibold text-white">{money(item.total || 0)}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => setDetail(null)}>Close</Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </motion.div>
   );
 }
@@ -747,18 +823,25 @@ function StaffDeliveryPage({ setMessage }) {
   );
 }
 
-function KpiCard({ label, value, icon }) {
+function KpiCard({ label, value, icon, onPress }) {
+  const content = (
+    <CardBody className="flex-row items-center gap-4">
+      <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-amber-400/15 text-amber-300">
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
+        <p className="mt-1 truncate text-xl font-black">{value}</p>
+      </div>
+    </CardBody>
+  );
   return (
-    <Card>
-      <CardBody className="flex-row items-center gap-4">
-        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-amber-400/15 text-amber-300">
-          {icon}
-        </div>
-        <div className="min-w-0">
-          <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
-          <p className="mt-1 truncate text-xl font-black">{value}</p>
-        </div>
-      </CardBody>
+    <Card className={onPress ? "cursor-pointer transition-colors hover:border-amber-400/60" : ""}>
+      {onPress ? (
+        <button type="button" className="w-full text-left" onClick={onPress}>
+          {content}
+        </button>
+      ) : content}
     </Card>
   );
 }

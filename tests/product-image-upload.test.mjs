@@ -129,6 +129,26 @@ test("makeOrderCode uses an incrementing sequence for unique order numbers", () 
   assert.equal(server.makeOrderCode(day, 42), "ORD-20260625-0042");
 });
 
+test("getNextOrderSequenceFromRows uses the largest numeric order suffix", () => {
+  const rows = [
+    { order_code: "ORD-20260625-0008" },
+    { order_code: "ORD-20260625-final" },
+    { order_code: "ORD-20260625-0012" },
+    { order_code: "ORD-20260624-9999" }
+  ];
+
+  assert.equal(server.getNextOrderSequenceFromRows(rows, "ORD-20260625-"), 13);
+  assert.equal(server.getNextOrderSequenceFromRows([], "ORD-20260625-"), 1);
+});
+
+test("isOrderCodeUniqueViolation detects duplicate order code database errors", () => {
+  assert.equal(
+    server.isOrderCodeUniqueViolation(new Error('duplicate key value violates unique constraint "orders_order_code_key"')),
+    true
+  );
+  assert.equal(server.isOrderCodeUniqueViolation(new Error("network failed")), false);
+});
+
 test("buildEmailJsVerificationPayload matches the verification template variables", () => {
   const payload = server.buildEmailJsVerificationPayload({
     email: "juan@gmail.com",

@@ -45,7 +45,6 @@ import {
   User,
   UserPlus,
 } from "lucide-react";
-import heroImage from "./assets/jazjo-store-hero.jpg";
 import AdminPanel from "./AdminPanel.jsx";
 import StaffPanel from "./StaffPanel.jsx";
 import {
@@ -181,6 +180,7 @@ const HOME_FEATURES = [
 ];
 
 const BRAND_LOGO = "/customer-app/logo.png";
+const HERO_IMAGE = "/assets/images/jazjo-store-hero.jpg";
 
 const CardHeader = Card.Header;
 const CardBody = Card.Content;
@@ -1070,7 +1070,7 @@ function HomePage({ isDark, onNavigate }) {
       <motion.div
         className={`relative flex min-h-[calc(100vh-76px)] items-center border-b px-4 py-20 transition-colors sm:px-8 lg:px-0 ${isDark ? "border-white/10" : "border-slate-200"}`}
         style={{
-          backgroundImage: `${heroOverlay}, url(${heroImage})`,
+          backgroundImage: `${heroOverlay}, url(${HERO_IMAGE})`,
           backgroundPosition: "center",
           backgroundSize: "cover",
         }}
@@ -1755,6 +1755,7 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
     paymentMethod: "QRPH (GCash)",
   });
   const [fieldErrors, setFieldErrors] = useState({});
+  const [placing, setPlacing] = useState(false);
   useEffect(() => {
     apiProfile()
       .then((data) => {
@@ -1809,6 +1810,7 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
 
   const checkout = async (event) => {
     event.preventDefault();
+    if (placing) return;
     setFieldErrors({});
     if (!lines.length) return setMessage("Your cart is empty.");
     if (!form.customerName.trim()) {
@@ -1825,29 +1827,36 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
       setFieldErrors({ addressText: "Delivery address is required." });
       return;
     }
-    const result = await apiCreateOrder({
-      ...form,
-      fullAddress: addressText,
-      address: addressText,
-      returnBaseUrl: window.location.origin,
-      items: lines.map((line) => ({
-        productId: line.product.id,
-        qty: line.caseTotal,
-      })),
-    });
-    if (result.order) {
-      const existing = readStorage(ORDERS_KEY, []).filter(
-        (order) => order.id !== result.order.id,
-      );
-      writeStorage(ORDERS_KEY, [result.order, ...existing]);
+    setPlacing(true);
+    try {
+      const result = await apiCreateOrder({
+        ...form,
+        fullAddress: addressText,
+        address: addressText,
+        returnBaseUrl: window.location.origin,
+        items: lines.map((line) => ({
+          productId: line.product.id,
+          qty: line.caseTotal,
+        })),
+      });
+      if (result.order) {
+        const existing = readStorage(ORDERS_KEY, []).filter(
+          (order) => order.id !== result.order.id,
+        );
+        writeStorage(ORDERS_KEY, [result.order, ...existing]);
+      }
+      if (result.checkoutUrl) {
+        window.location.href = result.checkoutUrl;
+        return;
+      }
+      setCart([]);
+      await refreshOrders().catch(() => {});
+      go("orders");
+    } catch (err) {
+      setMessage(err.message || "Unable to create order.");
+    } finally {
+      setPlacing(false);
     }
-    if (result.checkoutUrl) {
-      window.location.href = result.checkoutUrl;
-      return;
-    }
-    setCart([]);
-    await refreshOrders().catch(() => {});
-    go("orders");
   };
   const checkoutContactValidation = form.contact ? validateContact(form.contact) : { ok: true };
   const checkoutContactError = checkoutContactValidation.ok
@@ -2034,7 +2043,9 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
                   return (
                     <label
                       key={method.value}
-                      className={`relative flex min-h-24 cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors ${
+                      className={`relative flex min-h-24 items-start gap-3 rounded-xl border p-3 transition-colors ${
+                        placing ? "cursor-not-allowed opacity-70" : "cursor-pointer"
+                      } ${
                         selected
                           ? "border-emerald-400 bg-emerald-400/10 ring-1 ring-emerald-400/40"
                           : "border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]"
@@ -2046,6 +2057,7 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
                         name="paymentMethod"
                         value={method.value}
                         checked={form.paymentMethod === method.value}
+                        disabled={placing}
                         onChange={() => setForm({ ...form, paymentMethod: method.value })}
                       />
                       <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${selected ? "bg-emerald-400 text-slate-950" : "bg-[var(--bg-card-alt)] text-[var(--text-secondary)]"}`}>
@@ -2072,9 +2084,15 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
                 })}
               </div>
             </div>
-            <Button color="success" type="submit" className="w-full">
-              {form.paymentMethod.startsWith("QRPH") ? <CreditCard size={16} /> : <Truck size={16} />}
-              {form.paymentMethod.startsWith("QRPH") ? "Continue to QR Payment" : "Place COD Order"}
+            <Button color="success" type="submit" className="w-full" isLoading={placing} isDisabled={placing}>
+              {placing ? null : form.paymentMethod.startsWith("QRPH") ? <CreditCard size={16} /> : <Truck size={16} />}
+              {placing
+                ? form.paymentMethod.startsWith("QRPH")
+                  ? "Redirecting to payment..."
+                  : "Placing order..."
+                : form.paymentMethod.startsWith("QRPH")
+                  ? "Continue to QR Payment"
+                  : "Place COD Order"}
             </Button>
           </form>
         </CardBody>

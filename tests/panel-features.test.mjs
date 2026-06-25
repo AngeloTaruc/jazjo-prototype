@@ -36,6 +36,35 @@ test("admin report export buttons have PDF and Excel actions", () => {
 test("admin sales chart renders visible values and bar tracks", () => {
   assert.match(adminSource, /Sales Trend/);
   assert.match(adminSource, /money\(p\.sales\)/);
+  assert.match(adminSource, /p\.orders/);
   assert.match(adminSource, /chart-bar-track/);
   assert.match(adminSource, /aria-label=\{`\$\{p\.label\} sales/);
+});
+
+test("admin sales shows daily dated order totals", () => {
+  assert.match(serverSource, /dailyRows/);
+  assert.match(serverSource, /orders: rec\.orders/);
+  assert.match(adminSource, /Daily Sales by Date/);
+  assert.match(adminSource, /<Th>DATE<\/Th><Th>TOTAL ORDERS<\/Th><Th>SALES<\/Th>/);
+  assert.match(adminSource, /row\.date/);
+  assert.match(adminSource, /row\.orders/);
+});
+
+test("staff dashboard KPI cards open detail modals", () => {
+  assert.match(staffSource, /const \[detail, setDetail\] = useState\(null\)/);
+  assert.match(staffSource, /onPress=\{\(\) => setDetail\("prepare"\)\}/);
+  assert.match(staffSource, /onPress=\{\(\) => setDetail\("deliver"\)\}/);
+  assert.match(staffSource, /onPress=\{\(\) => setDetail\("completed"\)\}/);
+  assert.match(staffSource, /onPress=\{\(\) => setDetail\("lowStock"\)\}/);
+  assert.match(staffSource, /Staff Dashboard Details/);
+  assert.match(staffSource, /detailItems\.map/);
+  assert.match(staffSource, /function KpiCard\(\{ label, value, icon, onPress \}\)/);
+});
+
+test("staff dashboard loads data from staff-accessible endpoints", () => {
+  assert.doesNotMatch(staffSource, /apiAdminDashboard/);
+  assert.match(staffSource, /Promise\.all\(\[apiStaffOrders\(\), apiStaffInventory\(\)\]\)/);
+  assert.match(staffSource, /setData\(\{\s*orders:/);
+  assert.match(staffSource, /lowStock:/);
+  assert.match(staffSource, /lowStockCount:/);
 });

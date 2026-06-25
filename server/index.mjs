@@ -625,19 +625,33 @@ function makeOrderCode(date = new Date(), sequence = 1){
   return `ORD-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${String(safeSequence).padStart(4, "0")}`;
 }
 
+function getNextOrderSequenceFromRows(rows = [], prefix = ""){
+  let maxSequence = 0;
+  for(const row of rows || []){
+    const code = String(row?.order_code || "");
+    if(!code.startsWith(prefix)) continue;
+    const suffix = code.slice(prefix.length);
+    if(!/^\d+$/.test(suffix)) continue;
+    maxSequence = Math.max(maxSequence, Number(suffix));
+  }
+  return maxSequence + 1;
+}
+
+function isOrderCodeUniqueViolation(error){
+  const message = String(error?.message || error || "").toLowerCase();
+  return message.includes("duplicate key")
+    && (message.includes("orders_order_code") || message.includes("order_code"));
+}
+
 async function makeNextOrderCode(date = new Date()){
   const d = date instanceof Date ? date : new Date(date);
   const pad = (n) => String(n).padStart(2, "0");
   const prefix = `ORD-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-`;
   const rows = await supabaseRequest(
-    `/rest/v1/orders?select=order_code&order_code=like.${encodeURIComponent(`${prefix}%`)}&order=order_code.desc&limit=1`,
+    `/rest/v1/orders?select=order_code&order_code=like.${encodeURIComponent(`${prefix}%`)}&order=order_code.desc&limit=1000`,
     { serviceRole: true }
   ).catch(() => []);
-  const latest = String(rows?.[0]?.order_code || "");
-  const latestSequence = latest.startsWith(prefix)
-    ? Number(latest.slice(prefix.length))
-    : 0;
-  return makeOrderCode(d, Number.isFinite(latestSequence) ? latestSequence + 1 : 1);
+  return makeOrderCode(d, getNextOrderSequenceFromRows(rows, prefix));
 }
 
 function formatDate(value){
@@ -1349,9 +1363,10 @@ async function getPanelSales(){
     weekStart.setDate(d.getDate() - d.getDay());
     const weekKey = weekStart.toISOString().slice(0,10);
     for(const [m, key] of [[byDate,dateKey],[byWeek,weekKey],[byMonth,monthKey]]){
-      const rec = m.get(key) || { sales: 0, transactions: 0 };
+      const rec = m.get(key) || { sales: 0, transactions: 0, orders: 0 };
       rec.sales += Number(o.total || 0);
       rec.transactions += 1;
+      rec.orders += 1;
       m.set(key, rec);
     }
     for(const it of o.items || []){
@@ -1376,14 +1391,17 @@ async function getPanelSales(){
     const day = new Date(now);
     day.setDate(now.getDate() - i);
     const key = day.toISOString().slice(0,10);
-    const rec = byDate.get(key) || { sales: 0, transactions: 0 };
+    const rec = byDate.get(key) || { sales: 0, transactions: 0, orders: 0 };
     last7Days.push({
       key,
-      label: day.toLocaleDateString("en-US", { weekday: "short" }),
+      date: key,
+      label: day.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
       sales: rec.sales,
+      orders: rec.orders,
       transactions: rec.transactions
     });
   }
+  const dailyRows = [...last7Days].reverse();
   return {
     kpis: {
       todaySales: latestDaily?.[1]?.sales || 0,
@@ -1393,9 +1411,10 @@ async function getPanelSales(){
       avgOrderValue
     },
     chart: {
-      title: "Sales Trend (Last 7 Days)",
+      title: "Sales and Orders by Date (Last 7 Days)",
       points: last7Days
     },
+    dailyRows,
     rows: [
       { period: "Daily", sales: latestDaily?.[1]?.sales || 0, transactions: latestDaily?.[1]?.transactions || 0, bestSeller },
       { period: "Weekly", sales: latestWeekly?.[1]?.sales || 0, transactions: latestWeekly?.[1]?.transactions || 0, bestSeller },
@@ -2027,11 +2046,9 @@ async function createOrder(payload, authProfile){
     })
     : 0;
   const total = Math.max(0, Number((subtotal + deliveryFee - discountAmount).toFixed(2)));
-  const orderCode = await makeNextOrderCode();
 
   const useQrph = isQrphMethod(paymentMethod);
-  const orderInsertBody = {
-    order_code: orderCode,
+  const baseOrderInsertBody = {
     user_id: authProfile.user_id,
     customer_name: customerName,
     contact,
@@ -2045,14 +2062,28 @@ async function createOrder(payload, authProfile){
     payment_method: paymentMethod
   };
   if(Number(discountAmount || 0) > 0){
-    orderInsertBody.discount_amount = discountAmount;
+    baseOrderInsertBody.discount_amount = discountAmount;
   }
-  const inserted = await supabaseRequest("/rest/v1/orders", {
-    method: "POST",
-    serviceRole: true,
-    headers: { Prefer: "return=representation" },
-    body: [orderInsertBody]
-  });
+  let inserted = null;
+  let lastInsertError = null;
+  for(let attempt = 0; attempt < 5; attempt += 1){
+    const orderCode = await makeNextOrderCode();
+    try{
+      inserted = await supabaseRequest("/rest/v1/orders", {
+        method: "POST",
+        serviceRole: true,
+        headers: { Prefer: "return=representation" },
+        body: [{ ...baseOrderInsertBody, order_code: orderCode }]
+      });
+      break;
+    }catch(err){
+      lastInsertError = err;
+      if(!isOrderCodeUniqueViolation(err)) throw err;
+    }
+  }
+  if(!inserted?.[0]){
+    throw lastInsertError || new Error("Unable to create a unique order number.");
+  }
 
   const order = inserted[0];
 
@@ -3057,8 +3088,10 @@ export {
   PRODUCT_IMAGE_MAX_BYTES,
   buildEmailJsVerificationPayload,
   buildPaymongoOrderLineItems,
+  getNextOrderSequenceFromRows,
   getPsgcCitiesPath,
   handleRequest,
+  isOrderCodeUniqueViolation,
   isPaymongoProcessingStatusError,
   makeOrderCode,
   normalizeReturnBaseUrl,
