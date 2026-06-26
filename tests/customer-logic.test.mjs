@@ -16,13 +16,15 @@ import {
   normalizeCategory,
   paymentStatusLabel,
   partitionProductsByFavorites,
+  getRegistrationFieldState,
   statusLabel,
   toggleFavoriteProduct,
   validateContact,
   validateDeliveryAddress,
+  validateGmailAddress,
   validatePassword
 } from "../frontend/customer/src/lib/customerLogic.js";
-import { normalizeCustomerProfile } from "../frontend/customer/src/lib/api.js";
+import { normalizeCustomerProfile, normalizeOrder } from "../frontend/customer/src/lib/api.js";
 
 test("normalizeCategory maps brand categories into customer groups", () => {
   assert.equal(normalizeCategory("Coke Products", "Coke Sakto"), "Soft Drinks");
@@ -181,9 +183,57 @@ test("validateDeliveryAddress requires province and city selections", () => {
 test("validatePassword only requires a non-empty password", () => {
   assert.equal(validatePassword("").ok, false);
   assert.match(validatePassword("").message, /required/i);
-  assert.equal(validatePassword("a").ok, true);
-  assert.equal(validatePassword("!").ok, true);
+  assert.equal(validatePassword("a").ok, false);
+  assert.match(validatePassword("short").message, /at least 8/i);
   assert.equal(validatePassword("password123").ok, true);
+});
+
+test("validateGmailAddress reports format errors before Gmail domain errors", () => {
+  assert.match(validateGmailAddress("juan").message, /Invalid email format/);
+  assert.match(validateGmailAddress("juan@").message, /Invalid email format/);
+  assert.match(validateGmailAddress("juan@example.com").message, /gmail\.com/);
+  assert.equal(validateGmailAddress("JUAN@gmail.com").value, "juan@gmail.com");
+});
+
+test("getRegistrationFieldState blocks registration fields sequentially", () => {
+  const empty = getRegistrationFieldState({});
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(empty.enabled).filter((entry) => entry[1])),
+    { firstName: true }
+  );
+  assert.equal(empty.canSendVerificationCode, false);
+  assert.equal(empty.canRegister, false);
+
+  const readyForEmailCheck = getRegistrationFieldState({
+    firstName: "Ana",
+    lastName: "Santos",
+    email: "ana@gmail.com",
+    contact: "09123456789",
+    password: "password123",
+    confirmPassword: "password123",
+    address: {
+      fullAddress: "Unit 1",
+      street: "Road 1",
+      barangay: "Central",
+      provinceCode: "130000000",
+      provinceName: "Metro Manila",
+      cityCode: "137401000",
+      cityName: "City of Manila"
+    }
+  }, { emailExists: true, emailChecked: true });
+  assert.equal(readyForEmailCheck.enabled.contact, false);
+  assert.equal(readyForEmailCheck.errors.email, "Email is already registered.");
+  assert.equal(readyForEmailCheck.canSendVerificationCode, false);
+
+  const verified = getRegistrationFieldState(readyForEmailCheck.values, {
+    emailExists: false,
+    emailChecked: true,
+    emailVerified: true,
+    verificationExpiresIn: 300
+  });
+  assert.equal(verified.enabled.city, true);
+  assert.equal(verified.canSendVerificationCode, true);
+  assert.equal(verified.canRegister, true);
 });
 
 test("buildCheckoutPrefill maps logged-in profile fields to checkout fields", () => {
@@ -238,6 +288,18 @@ test("normalizeCustomerProfile maps API profile wrapper to profile form fields",
     contact: "09123456789",
     address: { fullAddress: "12 U, Road 11" }
   });
+});
+
+test("normalizeOrder carries fulfillment type and pickup delivery fee", () => {
+  const order = normalizeOrder({
+    id: "ORD-PICKUP",
+    fulfillment_type: "pickup",
+    delivery_fee: 0,
+    total: 200,
+    order_items: []
+  });
+  assert.equal(order.fulfillmentType, "pickup");
+  assert.equal(order.deliveryFee, 0);
 });
 
 test("mergeOrdersByOrderNumber groups duplicate order rows under one order", () => {

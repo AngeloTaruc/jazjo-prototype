@@ -26,10 +26,30 @@ import {
   apiStaffOrders,
   apiStaffInventory,
   apiStaffDelivery,
+  apiStaffCreateCategory,
+  apiStaffCreateProduct,
+  apiStaffDeleteCategory,
+  apiStaffDeleteProduct,
+  apiStaffRestock,
+  apiStaffUpdateProduct,
+  apiStaffUploadProductImage,
   apiUpdateOrderStatus,
-  apiUpdateOrderDetails
+  apiUpdateOrderDetails,
+  apiPrepareOrder,
+  apiUpdateOrderPreparation
 } from "./lib/api.js";
-import { clearSession, createDemandForecast, formatQty, getToken, money, normalizeContactInput, statusLabel } from "./lib/customerLogic.js";
+import { clearSession, formatQty, getToken, money, normalizeContactInput, statusLabel } from "./lib/customerLogic.js";
+import { AdminInventoryPage } from "./AdminPanel.jsx";
+import {
+  formatFulfillmentType,
+  fulfillmentColor,
+  getPreparationSummary,
+  paymentMethodColor,
+  paymentMethodLabel,
+  paymentStatusColor,
+  paymentStatusText,
+  statusColor,
+} from "./lib/panelLogic.js";
 
 const CardHeader = Card.Header;
 const CardBody = Card.Content;
@@ -61,8 +81,8 @@ function Th({ children }) {
   return <th className="px-3 py-3">{children}</th>;
 }
 
-function Tr({ children }) {
-  return <tr className="border-b border-white/5 transition-colors hover:bg-white/[.02]">{children}</tr>;
+function Tr({ children, className = "", ...props }) {
+  return <tr {...props} className={`border-b border-white/5 transition-colors hover:bg-white/[.02] ${className}`}>{children}</tr>;
 }
 
 function Td({ children, className = "" }) {
@@ -133,6 +153,23 @@ function collapseDeliveryTracks(tracks = []) {
     ...track,
     productName: track.items?.length > 1 ? `${track.items.length} items` : (track.items?.[0]?.name || track.productName || "-")
   }));
+}
+
+function OrderStatusChip({ status }) {
+  return <Chip color={statusColor(status)} variant="flat" size="sm">{statusLabel(status)}</Chip>;
+}
+
+function PaymentStatusChip({ order }) {
+  const label = paymentStatusText(order);
+  return <Chip color={paymentStatusColor(label)} variant="flat" size="sm">{label}</Chip>;
+}
+
+function PaymentMethodChip({ method }) {
+  return <Chip color={paymentMethodColor(method)} variant="flat" size="sm">{paymentMethodLabel(method)}</Chip>;
+}
+
+function FulfillmentChip({ value }) {
+  return <Chip color={fulfillmentColor(value)} variant="flat" size="sm">{formatFulfillmentType(value)}</Chip>;
 }
 
 function PanelPagination({ total, page, onChange, label }) {
@@ -432,6 +469,8 @@ function StaffOrdersPage({ setMessage }) {
   const [editingOrder, setEditingOrder] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [savingPreparation, setSavingPreparation] = useState(false);
+  const [submittingPrepare, setSubmittingPrepare] = useState(false);
   const perPage = 10;
   const statuses = ["All", "Pending Payment", "Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered", "Cancelled"];
   const editableStatuses = statuses.filter((status) => status !== "All");
@@ -459,7 +498,7 @@ function StaffOrdersPage({ setMessage }) {
     try {
       await apiUpdateOrderStatus(orderCode, newStatus);
       setMessage(`Order ${orderCode} marked as ${newStatus}.`);
-      load();
+      await load();
     } catch (err) {
       setMessage(`Error: ${err.message}`);
     }
@@ -512,6 +551,35 @@ function StaffOrdersPage({ setMessage }) {
       setSavingEdit(false);
     }
   };
+  const updatePreparation = async (productId, prepared) => {
+    if (!editingOrder) return;
+    const items = getPreparationSummary(editingOrder).items.map((item) => item.productId === productId ? { ...item, prepared } : item);
+    setSavingPreparation(true);
+    try {
+      const order = await apiUpdateOrderPreparation(editingOrder.id, items.map((item) => ({ productId: item.productId, prepared: item.prepared })));
+      setEditingOrder(order);
+      setMessage("Preparation progress updated.");
+      await load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setSavingPreparation(false);
+    }
+  };
+  const submitPreparation = async () => {
+    if (!editingOrder) return;
+    setSubmittingPrepare(true);
+    try {
+      const order = await apiPrepareOrder(editingOrder.id);
+      setEditingOrder(order);
+      setMessage(`Order ${editingOrder.id} moved to Preparing.`);
+      await load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setSubmittingPrepare(false);
+    }
+  };
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="flex items-center justify-between">
@@ -535,7 +603,7 @@ function StaffOrdersPage({ setMessage }) {
         <>
           <div className="overflow-x-auto">
             <Table>
-              <THead><Th>ORDER ID</Th><Th>DATE</Th><Th>CUSTOMER</Th><Th>TOTAL</Th><Th>STATUS</Th><Th>ACTION</Th></THead>
+              <THead><Th>ORDER ID</Th><Th>DATE</Th><Th>CUSTOMER</Th><Th>FULFILLMENT</Th><Th>PAYMENT</Th><Th>TOTAL</Th><Th>STATUS</Th><Th>ACTION</Th></THead>
               <TBody>
                 {paged.map((order, idx) => {
                   const next = nextStatus(order.status);
@@ -544,11 +612,13 @@ function StaffOrdersPage({ setMessage }) {
                       <Td><span className="font-semibold">{order.id}</span></Td>
                       <Td className="text-sm text-slate-400">{order.createdAt || "-"}</Td>
                       <Td>{order.customerName || "Customer"}</Td>
+                      <Td><FulfillmentChip value={order.fulfillmentType} /></Td>
+                      <Td><PaymentMethodChip method={order.paymentMethod} /></Td>
                       <Td className="font-semibold">{money(order.total)}</Td>
                       <Td>
                         <div className="flex items-center gap-2">
-                          <Chip color={statusLabel(order.status) === "Delivered" ? "success" : statusLabel(order.status) === "Cancelled" ? "danger" : "warning"} variant="flat" size="sm">{statusLabel(order.status)}</Chip>
-                          {order.paymentStatus === "paid" || order.payment_status === "paid" ? <Chip color="success" size="sm" variant="flat">Paid</Chip> : null}
+                          <OrderStatusChip status={order.status} />
+                          <PaymentStatusChip order={order} />
                         </div>
                       </Td>
                       <Td>
@@ -612,13 +682,24 @@ function StaffOrdersPage({ setMessage }) {
                   </select>
                 </label>
                 <label className="grid gap-2 text-sm font-semibold text-slate-200">
-                  Delivery Address
+                  {String(editingOrder?.fulfillmentType || editForm?.fulfillmentType || "").toLowerCase() === "pickup" ? "Pickup Location" : "Delivery Address"}
                   <textarea
                     className="min-h-24 rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
                     value={editForm?.address || ""}
                     onChange={(event) => setEditForm((current) => ({ ...current, address: event.target.value }))}
                   />
                 </label>
+                <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                  <p className="text-xs font-bold uppercase text-slate-500">Fulfillment</p>
+                  <div className="mt-2"><FulfillmentChip value={editingOrder?.fulfillmentType || editForm?.fulfillmentType} /></div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                  <p className="text-xs font-bold uppercase text-slate-500">Payment</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <PaymentMethodChip method={editingOrder?.paymentMethod} />
+                    <PaymentStatusChip order={editingOrder} />
+                  </div>
+                </div>
                 <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
                   <p className="mb-3 text-xs font-bold uppercase text-slate-500">Items</p>
                   <div className="grid gap-2">
@@ -640,6 +721,38 @@ function StaffOrdersPage({ setMessage }) {
                     ))}
                   </div>
                 </div>
+                {(statusLabel(editingOrder?.status) === "Order Placed" || statusLabel(editingOrder?.status) === "Preparing") ? (
+                  <div className="rounded-xl border border-amber-400/20 bg-amber-500/[.06] p-4">
+                    {getPreparationSummary(editingOrder).items.length === 0 ? (
+                      <p className="mb-4 text-sm text-slate-300">Preparation items are loading from the order details.</p>
+                    ) : null}
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold uppercase text-amber-300">Preparation Progress</p>
+                        <p className="text-sm text-slate-300">{getPreparationSummary(editingOrder).preparedItems} / {getPreparationSummary(editingOrder).totalItems} Items Prepared</p>
+                      </div>
+                      <Chip color="warning" variant="flat" size="sm">{getPreparationSummary(editingOrder).percent}%</Chip>
+                    </div>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-amber-400" style={{ width: `${getPreparationSummary(editingOrder).percent}%` }} /></div>
+                    <div className="mt-4 grid gap-3">
+                      {getPreparationSummary(editingOrder).items.map((item) => (
+                        <label key={item.productId || item.name} className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-3 text-sm">
+                          <div className="flex items-start gap-3">
+                            <input type="checkbox" checked={item.prepared === true} disabled={savingPreparation || submittingPrepare} onChange={(event) => updatePreparation(item.productId, event.target.checked)} className="mt-1 h-4 w-4 accent-amber-400" />
+                            <div className="min-w-0 flex-1">
+                              <p className="font-semibold text-white">{item.name}</p>
+                              <p className="text-xs text-slate-400">Ordered: {formatQty(item.qty)} Cases</p>
+                              {item.validationMessage ? <p className="mt-1 text-xs font-semibold text-red-400">{item.validationMessage}</p> : null}
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="mt-4 flex justify-end">
+                      <Button color="warning" onPress={submitPreparation} isDisabled={!getPreparationSummary(editingOrder).completed} isLoading={submittingPrepare}>Prepare Order</Button>
+                    </div>
+                  </div>
+                ) : null}
               </Modal.Body>
               <Modal.Footer>
                 <Button variant="flat" onPress={() => { setEditingOrder(null); setEditForm(null); }}>Cancel</Button>
@@ -657,117 +770,20 @@ function StaffOrdersPage({ setMessage }) {
 }
 
 function StaffInventoryPage({ setMessage }) {
-  const [inventory, setInventory] = useState([]);
-  const [forecastRows, setForecastRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState("All");
-  const [page, setPage] = useState(1);
-  const perPage = 10;
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [result, ordersResult] = await Promise.all([apiStaffInventory(), apiStaffOrders()]);
-      setInventory(result.inventory || []);
-      setForecastRows(createDemandForecast(result.inventory || [], ordersResult.orders || [], { horizonDays: 5 }).slice(0, 5));
-    } catch (err) {
-      setMessage(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-  useEffect(() => { load(); }, [load]);
-  const filtered = useMemo(() => {
-    if (filter === "All") return inventory;
-    return inventory.filter((p) => {
-      const status = p.status || (p.stockCases > 10 ? "In Stock" : p.stockCases > 0 ? "Low Stock" : "Out of Stock");
-      return status === filter;
-    });
-  }, [inventory, filter]);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
-  const safePage = Math.min(page, totalPages);
-  const paged = filtered.slice((safePage - 1) * perPage, safePage * perPage);
-  useEffect(() => { setPage(1); }, [filter]);
+  // Reuses the admin inventory manager, including the ARIMA Forecast Summary and createDemandForecast workflow.
   return (
-    <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-black">Inventory View</h2>
-        <Button size="sm" variant="flat" startContent={<RefreshCw size={14} />} onPress={load}>Refresh</Button>
-      </div>
-      <Card>
-        <CardHeader><h2 className="text-lg font-black">ARIMA Forecast Summary</h2></CardHeader>
-        <CardBody className="space-y-3">
-          <p className="text-xs text-slate-500">Next 5 days demand forecast from order history and recent demand trend.</p>
-          {forecastRows.length ? (
-            <div className="grid gap-2">
-              {forecastRows.map((row) => (
-                <div key={row.name} className="grid gap-2 rounded-xl border border-white/10 bg-white/[.03] p-3 sm:grid-cols-[1fr_auto_auto] sm:items-center">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-black text-white">{row.name}</p>
-                    <p className="text-xs text-slate-500">{row.model}</p>
-                  </div>
-                  <Chip color="warning" variant="flat" size="sm">{formatQty(row.forecastCases)} forecast</Chip>
-                  <Chip color={row.recommendedRestock > 0 ? "warning" : "default"} variant="flat" size="sm">
-                    Restock {formatQty(row.recommendedRestock)}
-                  </Chip>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-slate-400">No order history yet for forecasting.</p>
-          )}
-        </CardBody>
-      </Card>
-      <Tabs selectedKey={filter} onSelectionChange={(key) => setFilter(String(key))} color="warning" variant="underlined" size="sm">
-        <Tabs.List className="gap-0 overflow-x-auto border-b border-white/10">
-          {["All", "In Stock", "Low Stock", "Out of Stock"].map((s) => (
-            <Tabs.Tab id={s} key={s} className="min-w-max px-3 py-2 data-[selected=true]:text-amber-400">
-              <span className="text-xs">{s}</span>
-            </Tabs.Tab>
-          ))}
-        </Tabs.List>
-      </Tabs>
-      {loading ? (
-        <Card><CardBody className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}</CardBody></Card>
-      ) : paged.length === 0 ? (
-        <Card><CardBody><p className="text-sm text-slate-400">No products found.</p></CardBody></Card>
-      ) : (
-        <>
-          <div className="overflow-x-auto">
-            <Table>
-              <THead><Th>PRODUCT</Th><Th>CATEGORY</Th><Th>PRICE</Th><Th>STOCK</Th><Th>QTY/CASE</Th><Th>STATUS</Th></THead>
-              <TBody>
-                {paged.map((p, idx) => {
-                  const status = p.status || (p.stockCases > 10 ? "In Stock" : p.stockCases > 0 ? "Low Stock" : "Out of Stock");
-                  return (
-                    <Tr key={p.id || p.sku || idx}>
-                      <Td><span className="font-semibold">{p.name}</span></Td>
-                      <Td>{p.category || "-"}</Td>
-                      <Td>{money(p.price)}</Td>
-                      <Td>{formatQty(p.stockCases)} cases</Td>
-                      <Td>{Number(p.quantityPerCase || 1).toLocaleString()}</Td>
-                      <Td>
-                        <Chip
-                          color={status === "In Stock" ? "success" : status === "Low Stock" ? "warning" : "danger"}
-                          variant="flat"
-                          size="sm"
-                        >
-                          {status}
-                        </Chip>
-                      </Td>
-                    </Tr>
-                  );
-                })}
-              </TBody>
-            </Table>
-          </div>
-          {totalPages > 1 ? (
-            <div className="flex justify-center">
-              <PanelPagination total={totalPages} page={safePage} onChange={setPage} label="Inventory pagination" />
-            </div>
-          ) : null}
-        </>
-      )}
-    </motion.div>
+    <AdminInventoryPage
+      setMessage={setMessage}
+      inventoryApi={apiStaffInventory}
+      ordersApi={apiStaffOrders}
+      createCategoryApi={apiStaffCreateCategory}
+      deleteCategoryApi={apiStaffDeleteCategory}
+      createProductApi={apiStaffCreateProduct}
+      uploadProductImageApi={apiStaffUploadProductImage}
+      restockApi={apiStaffRestock}
+      updateProductApi={apiStaffUpdateProduct}
+      deleteProductApi={apiStaffDeleteProduct}
+    />
   );
 }
 
@@ -828,7 +844,7 @@ function StaffDeliveryPage({ setMessage }) {
             <>
               <div className="overflow-x-auto">
                 <Table>
-                  <THead><Th>ORDER</Th><Th>PRODUCT</Th><Th>QTY</Th><Th>CUSTOMER</Th><Th>STATUS</Th><Th>UPDATED</Th><Th>ACTION</Th></THead>
+                  <THead><Th>ORDER</Th><Th>PRODUCT</Th><Th>QTY</Th><Th>CUSTOMER</Th><Th>FULFILLMENT</Th><Th>PAYMENT</Th><Th>STATUS</Th><Th>UPDATED</Th><Th>ACTION</Th></THead>
                   <TBody>
                     {paged.map((track, idx) => (
                       <Tr key={idx}>
@@ -845,14 +861,10 @@ function StaffDeliveryPage({ setMessage }) {
                         </Td>
                         <Td>{formatQty(track.qty)}</Td>
                         <Td>{track.customerName}</Td>
+                        <Td><FulfillmentChip value={track.fulfillmentType} /></Td>
+                        <Td><PaymentMethodChip method={track.paymentMethod} /></Td>
                         <Td>
-                          <Chip
-                            color={statusLabel(track.status) === "Delivered" ? "success" : statusLabel(track.status) === "Cancelled" ? "danger" : "warning"}
-                            variant="flat"
-                            size="sm"
-                          >
-                            {statusLabel(track.status)}
-                          </Chip>
+                          <OrderStatusChip status={track.status} />
                         </Td>
                         <Td className="text-sm text-slate-400">{track.updatedAt || "-"}</Td>
                         <Td>
@@ -892,12 +904,11 @@ function StaffDeliveryPage({ setMessage }) {
                         <p className="themed-modal-label text-xs font-bold uppercase">Order Progress</p>
                         <p className="themed-modal-value text-sm">Order: <strong>{selectedDelivery?.orderId || "-"}</strong></p>
                       </div>
-                      <Chip
-                        color={statusLabel(selectedDelivery?.status) === "Delivered" ? "success" : statusLabel(selectedDelivery?.status) === "Cancelled" ? "danger" : "warning"}
-                        variant="flat"
-                      >
-                        {statusLabel(selectedDelivery?.status)}
-                      </Chip>
+                      <div className="flex flex-wrap gap-2">
+                        <FulfillmentChip value={selectedDelivery?.fulfillmentType} />
+                        <PaymentMethodChip method={selectedDelivery?.paymentMethod} />
+                        <OrderStatusChip status={selectedDelivery?.status} />
+                      </div>
                     </div>
                     <DeliveryTimeline status={selectedDelivery?.status} />
                   </CardBody>
@@ -912,12 +923,12 @@ function StaffDeliveryPage({ setMessage }) {
                     <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.contact || selectedDelivery?.recipientContact || "-"}</p>
                   </div>
                   <div className="themed-modal-card rounded-xl px-4 py-3">
-                    <p className="delivery-field-label text-xs font-bold uppercase">Delivery Status</p>
-                    <p className="delivery-field-value mt-1 font-semibold">{statusLabel(selectedDelivery?.status) || "-"}</p>
+                    <p className="delivery-field-label text-xs font-bold uppercase">Payment Method</p>
+                    <div className="mt-2"><PaymentMethodChip method={selectedDelivery?.paymentMethod} /></div>
                   </div>
                   <div className="themed-modal-card rounded-xl px-4 py-3">
-                    <p className="delivery-field-label text-xs font-bold uppercase">Delivery Date</p>
-                    <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.deliveryDate || selectedDelivery?.updatedAt || "-"}</p>
+                    <p className="delivery-field-label text-xs font-bold uppercase">Fulfillment Type</p>
+                    <div className="mt-2"><FulfillmentChip value={selectedDelivery?.fulfillmentType} /></div>
                   </div>
                 </div>
                 <div className="themed-modal-card rounded-xl px-4 py-3">

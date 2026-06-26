@@ -49,6 +49,7 @@ import AdminPanel from "./AdminPanel.jsx";
 import StaffPanel from "./StaffPanel.jsx";
 import {
   apiChangePassword,
+  apiCheckRegistrationEmail,
   apiCreateOrder,
   apiLogin,
   apiOrderDetails,
@@ -81,6 +82,7 @@ import {
   currentCustomerEmail,
   formatCountdown,
   formatQty,
+  getRegistrationFieldState,
   getToken,
   isRetryablePaymentReason,
   money,
@@ -126,6 +128,20 @@ const PAYMENT_METHOD_OPTIONS = [
     label: "Cash on Delivery",
     description: "Pay in cash when your order arrives.",
     type: "cod",
+  },
+];
+const FULFILLMENT_OPTIONS = [
+  {
+    value: "delivery",
+    label: "Delivery",
+    description: "Send the order to your delivery address.",
+    icon: <Truck size={18} />,
+  },
+  {
+    value: "pickup",
+    label: "Pickup",
+    description: "Pick up from Jazjo Beverages. No delivery fee.",
+    icon: <Package size={18} />,
   },
 ];
 const REWARD_CATALOG = [
@@ -299,6 +315,8 @@ function DeliveryAddressSelect({
   isRequired,
   className = "",
   setMessage,
+  disabledFields = {},
+  fieldErrors = {},
 }) {
   const [provinces, setProvinces] = useState([]);
   const [cities, setCities] = useState([]);
@@ -377,6 +395,9 @@ function DeliveryAddressSelect({
         value={selected.fullAddress || ""}
         onValueChange={(fullAddress) => onValueChange?.({ ...selected, fullAddress })}
         placeholder="House no., building, unit, or landmark"
+        isDisabled={Boolean(disabledFields.fullAddress)}
+        isInvalid={Boolean(fieldErrors.fullAddress)}
+        errorMessage={fieldErrors.fullAddress}
         startContent={<MapPin size={18} />}
       />
       <div className="grid gap-3 sm:grid-cols-2">
@@ -386,6 +407,9 @@ function DeliveryAddressSelect({
           value={selected.street || ""}
           onValueChange={(street) => onValueChange?.({ ...selected, street })}
           placeholder="Street name"
+          isDisabled={Boolean(disabledFields.street)}
+          isInvalid={Boolean(fieldErrors.street)}
+          errorMessage={fieldErrors.street}
         />
         <Input
           isRequired={isRequired}
@@ -393,6 +417,9 @@ function DeliveryAddressSelect({
           value={selected.barangay || ""}
           onValueChange={(barangay) => onValueChange?.({ ...selected, barangay })}
           placeholder="Barangay"
+          isDisabled={Boolean(disabledFields.barangay)}
+          isInvalid={Boolean(fieldErrors.barangay)}
+          errorMessage={fieldErrors.barangay}
         />
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -402,8 +429,9 @@ function DeliveryAddressSelect({
           onSelectionChange={(key) => selectProvince(String(key))}
           fullWidth
           variant="bordered"
+          isDisabled={Boolean(disabledFields.province)}
         >
-          <Select.Trigger className={selectTriggerClass}>
+          <Select.Trigger className={`${selectTriggerClass} ${fieldErrors.province ? "border-red-500 shadow-[0_0_0_1px_rgba(248,113,113,.75)]" : ""}`}>
             <Select.Value>
               {selected.provinceName || (loadingProvinces ? "Loading locations..." : "Choose province or Metro Manila")}
             </Select.Value>
@@ -430,9 +458,9 @@ function DeliveryAddressSelect({
           onSelectionChange={(key) => selectCity(String(key))}
           fullWidth
           variant="bordered"
-          isDisabled={!selected.provinceCode}
+          isDisabled={!selected.provinceCode || Boolean(disabledFields.city)}
         >
-          <Select.Trigger className={selectTriggerClass}>
+          <Select.Trigger className={`${selectTriggerClass} ${fieldErrors.city ? "border-red-500 shadow-[0_0_0_1px_rgba(248,113,113,.75)]" : ""}`}>
             <Select.Value>
               {selected.cityName || (loadingCities ? "Loading cities..." : "Choose city")}
             </Select.Value>
@@ -454,6 +482,11 @@ function DeliveryAddressSelect({
           </Select.Popover>
         </Select>
       </div>
+      {fieldErrors.province || fieldErrors.city ? (
+        <p className="text-xs font-semibold text-red-400">
+          {fieldErrors.province || fieldErrors.city}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1752,6 +1785,7 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
     contact: "",
     address: {},
     addressText: "",
+    fulfillmentType: "delivery",
     paymentMethod: "QRPH (GCash)",
   });
   const [fieldErrors, setFieldErrors] = useState({});
@@ -1786,7 +1820,7 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
     })
     .filter(Boolean);
   const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0);
-  const deliveryFee = calculateDeliveryFee(subtotal, deliverySettings);
+  const deliveryFee = form.fulfillmentType === "pickup" ? 0 : calculateDeliveryFee(subtotal, deliverySettings);
   const total = subtotal + deliveryFee;
 
   const updateQty = (line, delta) => {
@@ -1823,7 +1857,8 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
       return;
     }
     const addressText = String(form.addressText || "").trim();
-    if (!addressText) {
+    const isPickup = form.fulfillmentType === "pickup";
+    if (!isPickup && !addressText) {
       setFieldErrors({ addressText: "Delivery address is required." });
       return;
     }
@@ -1831,8 +1866,9 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
     try {
       const result = await apiCreateOrder({
         ...form,
-        fullAddress: addressText,
-        address: addressText,
+        fullAddress: isPickup ? "Pickup at Jazjo Beverages" : addressText,
+        address: isPickup ? "Pickup at Jazjo Beverages" : addressText,
+        fulfillmentType: form.fulfillmentType,
         returnBaseUrl: window.location.origin,
         items: lines.map((line) => ({
           productId: line.product.id,
@@ -1994,6 +2030,62 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
               total={total}
             />
             <Divider />
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-semibold text-[var(--text-secondary)]">
+                  Fulfillment
+                </span>
+                <Chip size="sm" color="success" variant="flat">
+                  {form.fulfillmentType === "pickup" ? "Pickup" : "Delivery"}
+                </Chip>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {FULFILLMENT_OPTIONS.map((option) => {
+                  const selected = form.fulfillmentType === option.value;
+                  return (
+                    <label
+                      key={option.value}
+                      className={`relative flex min-h-24 items-start gap-3 rounded-xl border p-3 transition-colors ${
+                        placing ? "cursor-not-allowed opacity-70" : "cursor-pointer"
+                      } ${
+                        selected
+                          ? "border-emerald-400 bg-emerald-400/10 ring-1 ring-emerald-400/40"
+                          : "border-[var(--border)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]"
+                      }`}
+                    >
+                      <input
+                        className="sr-only"
+                        type="radio"
+                        name="fulfillmentType"
+                        value={option.value}
+                        checked={form.fulfillmentType === option.value}
+                        disabled={placing}
+                        onChange={() => setForm({ ...form, fulfillmentType: option.value })}
+                      />
+                      <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${selected ? "bg-emerald-400 text-slate-950" : "bg-[var(--bg-card-alt)] text-[var(--text-secondary)]"}`}>
+                        {option.icon}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-black text-[var(--text-heading)]">
+                          {option.label}
+                        </span>
+                        <span className="mt-1 block text-xs leading-5 text-[var(--text-muted)]">
+                          {option.description}
+                        </span>
+                      </span>
+                      <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${selected ? "border-emerald-400 bg-emerald-400 text-slate-950" : "border-[var(--border-strong)]"}`}>
+                        {selected ? <ShieldCheck size={13} /> : null}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              {form.fulfillmentType === "pickup" ? (
+                <p className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-200">
+                  Pickup orders do not require a delivery address.
+                </p>
+              ) : null}
+            </div>
             <Input
               isRequired
               label="Name"
@@ -2020,14 +2112,16 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
               isInvalid={Boolean(checkoutContactError)}
               errorMessage={checkoutContactError}
             />
-            <Input
-              isRequired
-              label="Delivery Address"
-              value={form.addressText}
-              onValueChange={(v) => setForm({ ...form, addressText: v })}
-              isInvalid={Boolean(fieldErrors.addressText)}
-              errorMessage={fieldErrors.addressText}
-            />
+            {form.fulfillmentType === "delivery" ? (
+              <Input
+                isRequired
+                label="Delivery Address"
+                value={form.addressText}
+                onValueChange={(v) => setForm({ ...form, addressText: v })}
+                isInvalid={Boolean(fieldErrors.addressText)}
+                errorMessage={fieldErrors.addressText}
+              />
+            ) : null}
             <div className="grid gap-2">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-semibold text-[var(--text-secondary)]">
@@ -2085,12 +2179,16 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
               </div>
             </div>
             <Button color="success" type="submit" className="w-full" isLoading={placing} isDisabled={placing}>
-              {placing ? null : form.paymentMethod.startsWith("QRPH") ? <CreditCard size={16} /> : <Truck size={16} />}
+              {placing ? null : form.fulfillmentType === "pickup" ? <Package size={16} /> : form.paymentMethod.startsWith("QRPH") ? <CreditCard size={16} /> : <Truck size={16} />}
               {placing
-                ? form.paymentMethod.startsWith("QRPH")
+                ? form.fulfillmentType === "pickup"
+                  ? "Placing pickup order..."
+                  : form.paymentMethod.startsWith("QRPH")
                   ? "Redirecting to payment..."
                   : "Placing order..."
-                : form.paymentMethod.startsWith("QRPH")
+                : form.fulfillmentType === "pickup"
+                  ? "Place Pickup Order"
+                  : form.paymentMethod.startsWith("QRPH")
                   ? "Continue to QR Payment"
                   : "Place COD Order"}
             </Button>
@@ -2266,6 +2364,8 @@ function OrdersPage({ orders, refreshOrders, onNavigate, setMessage }) {
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <OrderStatusChip status={latestOrder.status} />
+              <FulfillmentChip value={latestOrder.fulfillmentType} />
+              <PaymentMethodChip method={latestOrder.paymentMethod} />
               <PaymentStatusChip order={latestOrder} />
               <strong className="text-xl text-white">
                 {money(latestOrder.total)}
@@ -2411,6 +2511,7 @@ function OrderDetailsPage({ id, onNavigate }) {
       </section>
     );
   const label = statusLabel(order.status);
+  const isPickupOrder = String(order.fulfillmentType || "").toLowerCase() === "pickup";
   return (
     <motion.section
       className="space-y-5"
@@ -2443,15 +2544,22 @@ function OrderDetailsPage({ id, onNavigate }) {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <OrderStatusChip status={label} />
+            <FulfillmentChip value={order.fulfillmentType} />
+            <PaymentMethodChip method={order.paymentMethod} />
             <PaymentStatusChip order={order} />
           </div>
         </CardHeader>
         <CardBody className="gap-5 p-6">
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-4">
             <DetailTile
               label="Payment"
-              value={`${order.paymentMethod || "QRPH"} - ${paymentStatusLabel(order.paymentStatus, order.status)}`}
+              value={`${paymentMethodLabel(order.paymentMethod)} - ${paymentStatusLabel(order.paymentStatus, order.status)}`}
               icon={<CreditCard size={18} />}
+            />
+            <DetailTile
+              label="Fulfillment"
+              value={formatFulfillmentType(order.fulfillmentType)}
+              icon={isPickupOrder ? <Package size={18} /> : <Truck size={18} />}
             />
             <DetailTile
               label="Contact"
@@ -2459,9 +2567,9 @@ function OrderDetailsPage({ id, onNavigate }) {
               icon={<Phone size={18} />}
             />
             <DetailTile
-              label="Delivery Address"
-              value={order.address || "Delivery address"}
-              icon={<MapPin size={18} />}
+              label={isPickupOrder ? "Pickup Location" : "Delivery Address"}
+              value={order.address || (isPickupOrder ? "Jazjo Beverages pickup counter" : "Delivery address")}
+              icon={isPickupOrder ? <Package size={18} /> : <MapPin size={18} />}
             />
           </div>
           <Card className="border border-white/10 bg-white/[.04]">
@@ -2883,7 +2991,6 @@ function LoginPage({ onNavigate, setMessage }) {
       badge="Welcome back"
       title="Customer Login"
       subtitle="Access your cart, orders, profile, and rewards."
-      actionLabel="Create an account"
       message={authMessage}
       onAction={() => onNavigate("register")}
     >
@@ -2914,16 +3021,23 @@ function LoginPage({ onNavigate, setMessage }) {
             </button>
           }
         />
-        <Button color="success" size="lg" type="submit" className="w-full">
-          <LockKeyhole size={18} />
-          Login
-        </Button>
         <Button
           variant="flat"
           className="w-full"
           onPress={() => onNavigate("products")}
         >
           Browse products first
+        </Button>
+        <Button color="success" size="lg" type="submit" className="w-full">
+          <LockKeyhole size={18} />
+          Login
+        </Button>
+        <Button
+          variant="light"
+          className="w-full"
+          onPress={() => onNavigate("register")}
+        >
+          Create an account
         </Button>
       </form>
     </AuthCard>
@@ -2953,7 +3067,31 @@ function RegisterPage({ onNavigate, setMessage }) {
   const [verificationExpiresIn, setVerificationExpiresIn] = useState(0);
   const [resendAvailableIn, setResendAvailableIn] = useState(0);
   const [verificationError, setVerificationError] = useState("");
+  const [emailAvailability, setEmailAvailability] = useState({
+    checked: false,
+    checking: false,
+    exists: false,
+    value: "",
+  });
   const verificationTimerActive = verificationExpiresIn > 0 || resendAvailableIn > 0;
+  const registrationState = useMemo(() => getRegistrationFieldState(form, {
+    emailChecked: emailAvailability.checked && emailAvailability.value === String(form.email || "").trim().toLowerCase(),
+    emailChecking: emailAvailability.checking,
+    emailExists: emailAvailability.exists,
+    emailVerified,
+    verificationExpiresIn,
+  }), [emailAvailability, emailVerified, form, verificationExpiresIn]);
+  const activeFieldErrors = Object.fromEntries(
+    Object.entries(fieldErrors).filter(([, value]) => value !== undefined && value !== null && value !== "")
+  );
+  const displayedFieldErrors = { ...registrationState.errors, ...activeFieldErrors };
+  const disabledAddressFields = {
+    fullAddress: !registrationState.enabled.fullAddress,
+    street: !registrationState.enabled.street,
+    barangay: !registrationState.enabled.barangay,
+    province: !registrationState.enabled.province,
+    city: !registrationState.enabled.city,
+  };
 
   const setInlineFieldError = (field, message) => {
     setFieldErrors({ [field]: message });
@@ -2989,6 +3127,51 @@ function RegisterPage({ onNavigate, setMessage }) {
     if (verificationExpiresIn <= 0) setEmailVerified(false);
   }, [verificationExpiresIn]);
 
+  useEffect(() => {
+    const email = validateGmailAddress(form.email);
+    if (!email.ok) {
+      setEmailAvailability({
+        checked: false,
+        checking: false,
+        exists: false,
+        value: String(form.email || "").trim().toLowerCase(),
+      });
+      return undefined;
+    }
+
+    setEmailAvailability({
+      checked: false,
+      checking: true,
+      exists: false,
+      value: email.value,
+    });
+    const timer = window.setTimeout(() => {
+      apiCheckRegistrationEmail(email.value)
+        .then((result) => {
+          setEmailAvailability({
+            checked: true,
+            checking: false,
+            exists: Boolean(result.exists),
+            value: email.value,
+          });
+          setFieldErrors((current) => ({
+            ...current,
+            email: result.exists ? "Email is already registered." : undefined,
+          }));
+        })
+        .catch((err) => {
+          setEmailAvailability({
+            checked: false,
+            checking: false,
+            exists: false,
+            value: email.value,
+          });
+          setFieldErrors((current) => ({ ...current, email: err.message }));
+        });
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [form.email]);
+
   const requestCode = async (fromModal = false) => {
     setAuthMessage("");
     setAuthMessageStatus("danger");
@@ -2998,6 +3181,12 @@ function RegisterPage({ onNavigate, setMessage }) {
     if (!email.ok) {
       if (fromModal) setVerificationError(email.message);
       else setInlineFieldError("email", email.message);
+      return;
+    }
+    if (!registrationState.canSendVerificationCode) {
+      const message = displayedFieldErrors.email || "Enter an available Gmail address before requesting a code.";
+      if (fromModal) setVerificationError(message);
+      else setInlineFieldError("email", message);
       return;
     }
     setSendingCode(true);
@@ -3055,8 +3244,10 @@ function RegisterPage({ onNavigate, setMessage }) {
     setAuthMessage("");
     setAuthMessageStatus("danger");
     setFieldErrors({});
-    if (!form.firstName.trim() || !form.lastName.trim())
-      return setAuthMessage("First name and last name are required.");
+    if (!registrationState.canRegister) {
+      setFieldErrors(registrationState.errors);
+      return setAuthMessage("Complete the form in order and verify your email before registering.");
+    }
     const email = validateGmailAddress(form.email);
     if (!email.ok) return setInlineFieldError("email", email.message);
     const contact = validateContact(form.contact);
@@ -3107,6 +3298,8 @@ function RegisterPage({ onNavigate, setMessage }) {
           label="First Name"
           value={form.firstName}
           onValueChange={(v) => setForm({ ...form, firstName: v })}
+          isInvalid={Boolean(displayedFieldErrors.firstName)}
+          errorMessage={displayedFieldErrors.firstName}
           startContent={<UserPlus size={18} />}
         />
         <Input
@@ -3114,6 +3307,9 @@ function RegisterPage({ onNavigate, setMessage }) {
           label="Last Name"
           value={form.lastName}
           onValueChange={(v) => setForm({ ...form, lastName: v })}
+          isDisabled={!registrationState.enabled.lastName}
+          isInvalid={Boolean(displayedFieldErrors.lastName)}
+          errorMessage={displayedFieldErrors.lastName}
           startContent={<UserPlus size={18} />}
         />
         <Input
@@ -3130,8 +3326,9 @@ function RegisterPage({ onNavigate, setMessage }) {
           }}
           className="sm:col-span-2"
           placeholder="name@gmail.com"
-          isInvalid={Boolean(fieldErrors.email)}
-          errorMessage={fieldErrors.email}
+          isDisabled={!registrationState.enabled.email}
+          isInvalid={Boolean(displayedFieldErrors.email)}
+          errorMessage={displayedFieldErrors.email}
           startContent={<Mail size={18} />}
         />
         <Input
@@ -3142,8 +3339,9 @@ function RegisterPage({ onNavigate, setMessage }) {
           placeholder="09xxxxxxxxx"
           inputMode="numeric"
           maxLength={11}
-          isInvalid={Boolean(registerContactError)}
-          errorMessage={registerContactError}
+          isDisabled={!registrationState.enabled.contact}
+          isInvalid={Boolean(displayedFieldErrors.contact || registerContactError)}
+          errorMessage={displayedFieldErrors.contact || registerContactError}
           startContent={<Phone size={18} />}
         />
         <Input
@@ -3155,8 +3353,9 @@ function RegisterPage({ onNavigate, setMessage }) {
           placeholder=""
           description=""
           autoComplete="new-password"
-          isInvalid={Boolean(fieldErrors.password)}
-          errorMessage={fieldErrors.password}
+          isDisabled={!registrationState.enabled.password}
+          isInvalid={Boolean(displayedFieldErrors.password)}
+          errorMessage={displayedFieldErrors.password}
           startContent={<LockKeyhole size={18} />}
           endContent={
             <button
@@ -3178,8 +3377,9 @@ function RegisterPage({ onNavigate, setMessage }) {
           placeholder=""
           description=""
           autoComplete="new-password"
-          isInvalid={Boolean(fieldErrors.confirmPassword)}
-          errorMessage={fieldErrors.confirmPassword}
+          isDisabled={!registrationState.enabled.confirmPassword}
+          isInvalid={Boolean(displayedFieldErrors.confirmPassword)}
+          errorMessage={displayedFieldErrors.confirmPassword}
           startContent={<LockKeyhole size={18} />}
           className="sm:col-span-2"
           endContent={
@@ -3194,7 +3394,7 @@ function RegisterPage({ onNavigate, setMessage }) {
           }
         />
         <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-[var(--bg-surface)] p-3 sm:col-span-2 ${
-          fieldErrors.verificationCode
+          displayedFieldErrors.verificationCode
             ? "border-red-500 shadow-[0_0_0_1px_rgba(248,113,113,.75)]"
             : "border-[var(--border)]"
         }`}>
@@ -3218,6 +3418,7 @@ function RegisterPage({ onNavigate, setMessage }) {
             color={emailVerified && verificationExpiresIn > 0 ? "success" : "default"}
             variant="flat"
             isLoading={sendingCode}
+            isDisabled={!registrationState.canSendVerificationCode}
             onPress={() => {
               if (verificationExpiresIn > 0) {
                 setVerificationModalOpen(true);
@@ -3229,9 +3430,9 @@ function RegisterPage({ onNavigate, setMessage }) {
           >
             {verificationExpiresIn > 0 ? "Review Verification" : "Send Verification Code"}
           </Button>
-          {fieldErrors.verificationCode ? (
+          {displayedFieldErrors.verificationCode ? (
             <p className="basis-full text-xs font-semibold text-red-400">
-              {fieldErrors.verificationCode}
+              {displayedFieldErrors.verificationCode}
             </p>
           ) : null}
         </div>
@@ -3240,12 +3441,15 @@ function RegisterPage({ onNavigate, setMessage }) {
           value={form.address}
           onValueChange={(v) => setForm({ ...form, address: v })}
           setMessage={setMessage}
+          disabledFields={disabledAddressFields}
+          fieldErrors={displayedFieldErrors}
           className="sm:col-span-2"
         />
         <Button
           color="success"
           size="lg"
           type="submit"
+          isDisabled={!registrationState.canRegister}
           className="sm:col-span-2"
         >
           <UserPlus size={18} />
@@ -3399,9 +3603,11 @@ function AuthCard({
             <h2 className="text-2xl font-black text-[var(--text-heading)]">{title}</h2>
             <p className="text-sm text-[var(--text-muted)]">{subtitle}</p>
           </div>
-          <Button className="text-[var(--text-primary)]" size="sm" variant="flat" onPress={onAction}>
-            {actionLabel}
-          </Button>
+          {actionLabel ? (
+            <Button className="text-[var(--text-primary)]" size="sm" variant="flat" onPress={onAction}>
+              {actionLabel}
+            </Button>
+          ) : null}
         </CardHeader>
         <CardBody className="gap-4 p-6 pt-2">
           {message ? (
@@ -3457,6 +3663,30 @@ function paymentStatusColor(label) {
   return "default";
 }
 
+function formatFulfillmentType(value) {
+  return String(value || "delivery").toLowerCase() === "pickup" ? "Pickup" : "Delivery";
+}
+
+function fulfillmentColor(value) {
+  return String(value || "delivery").toLowerCase() === "pickup" ? "secondary" : "primary";
+}
+
+function paymentMethodLabel(value) {
+  const normalized = String(value || "bank_qr_ph").trim().toLowerCase();
+  if (normalized === "cod" || normalized === "cash_on_delivery") return "COD";
+  if (normalized === "gcash") return "GCash";
+  if (normalized === "maya" || normalized === "paymaya") return "Maya";
+  return "Bank QR PH";
+}
+
+function paymentMethodColor(value) {
+  const normalized = String(value || "bank_qr_ph").trim().toLowerCase();
+  if (normalized === "cod" || normalized === "cash_on_delivery") return "warning";
+  if (normalized === "gcash") return "success";
+  if (normalized === "maya" || normalized === "paymaya") return "secondary";
+  return "primary";
+}
+
 function isPendingPaymentOrder(order) {
   return statusLabel(order?.status) === "Pending Payment" &&
     paymentStatusLabel(order?.paymentStatus, order?.status) !== "Paid";
@@ -3494,6 +3724,22 @@ function PaymentStatusChip({ order }) {
   );
 }
 
+function PaymentMethodChip({ method }) {
+  return (
+    <Chip color={paymentMethodColor(method)} variant="flat" size="sm">
+      {paymentMethodLabel(method)}
+    </Chip>
+  );
+}
+
+function FulfillmentChip({ value }) {
+  return (
+    <Chip color={fulfillmentColor(value)} variant="flat" size="sm">
+      {formatFulfillmentType(value)}
+    </Chip>
+  );
+}
+
 function OrderListCard({
   order,
   index,
@@ -3520,12 +3766,14 @@ function OrderListCard({
                   <Package size={18} />
                 </Avatar.Fallback>
               </Avatar>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <strong className="truncate text-white">{order.id}</strong>
-                  <OrderStatusChip status={label} />
-                  <PaymentStatusChip order={order} />
-                </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <strong className="truncate text-white">{order.id}</strong>
+                      <OrderStatusChip status={label} />
+                      <FulfillmentChip value={order.fulfillmentType} />
+                      <PaymentMethodChip method={order.paymentMethod} />
+                      <PaymentStatusChip order={order} />
+                    </div>
                 <p className="text-xs text-slate-400">
                   {order.createdAt || "Recently placed"}
                 </p>

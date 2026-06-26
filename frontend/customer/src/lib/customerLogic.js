@@ -130,6 +130,9 @@ export function normalizeContactInput(contact) {
 export function validateGmailAddress(email) {
   const value = String(email || "").trim().toLowerCase();
   if (!value) return { ok: false, message: "Email is required." };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+    return { ok: false, message: "Invalid email format." };
+  }
   if (!value.endsWith("@gmail.com")) {
     return { ok: false, message: "Email must end with @gmail.com." };
   }
@@ -139,7 +142,122 @@ export function validateGmailAddress(email) {
 export function validatePassword(password) {
   const value = String(password || "");
   if (!value.trim()) return { ok: false, message: "Password is required." };
+  if (value.length < 8) return { ok: false, message: "Password must be at least 8 characters." };
   return { ok: true, value };
+}
+
+function validateRequiredText(value, label) {
+  const normalized = String(value || "").trim().replace(/\s+/g, " ");
+  if (!normalized) return { ok: false, message: `${label} is required.` };
+  return { ok: true, value: normalized };
+}
+
+function buildRegistrationValues(form = {}) {
+  const address = form.address || {};
+  return {
+    firstName: String(form.firstName || "").trim(),
+    lastName: String(form.lastName || "").trim(),
+    email: String(form.email || "").trim().toLowerCase(),
+    contact: String(form.contact || "").trim(),
+    password: String(form.password || ""),
+    confirmPassword: String(form.confirmPassword || ""),
+    address: {
+      fullAddress: String(address.fullAddress || address.full_address || "").trim(),
+      street: String(address.street || "").trim(),
+      barangay: String(address.barangay || address.baranggay || "").trim(),
+      provinceCode: String(address.provinceCode || "").trim(),
+      provinceName: String(address.provinceName || "").trim(),
+      cityCode: String(address.cityCode || "").trim(),
+      cityName: String(address.cityName || "").trim()
+    }
+  };
+}
+
+export function getRegistrationFieldState(form = {}, {
+  emailChecked = false,
+  emailChecking = false,
+  emailExists = false,
+  emailVerified = false,
+  verificationExpiresIn = 0
+} = {}) {
+  const values = buildRegistrationValues(form);
+  const errors = {};
+  const valid = {};
+
+  const firstName = validateRequiredText(values.firstName, "First name");
+  valid.firstName = firstName.ok;
+  if (values.firstName && !firstName.ok) errors.firstName = firstName.message;
+
+  const lastName = validateRequiredText(values.lastName, "Last name");
+  valid.lastName = lastName.ok;
+  if (values.lastName && !lastName.ok) errors.lastName = lastName.message;
+
+  const email = validateGmailAddress(values.email);
+  valid.email = email.ok && emailChecked && !emailChecking && !emailExists;
+  if (values.email && !email.ok) errors.email = email.message;
+  else if (email.ok && emailExists) errors.email = "Email is already registered.";
+  else if (email.ok && emailChecking) errors.email = "Checking email availability...";
+
+  const contact = validateContact(values.contact);
+  valid.contact = contact.ok;
+  if (values.contact && !contact.ok) errors.contact = contact.message;
+
+  const password = validatePassword(values.password);
+  valid.password = password.ok;
+  if (values.password && !password.ok) errors.password = password.message;
+
+  valid.confirmPassword = Boolean(values.confirmPassword) && values.confirmPassword === values.password;
+  if (values.confirmPassword && !valid.confirmPassword) {
+    errors.confirmPassword = "Confirm password must match password.";
+  }
+
+  const address = validateDeliveryAddress(values.address);
+  valid.fullAddress = Boolean(values.address.fullAddress);
+  valid.street = Boolean(values.address.street);
+  valid.barangay = Boolean(values.address.barangay);
+  valid.province = Boolean(values.address.provinceCode && values.address.provinceName);
+  valid.city = address.ok;
+  if (values.address.fullAddress && !valid.fullAddress) errors.fullAddress = "Please enter the full delivery address.";
+  if (values.address.street && !valid.street) errors.street = "Please enter the street.";
+  if (values.address.barangay && !valid.barangay) errors.barangay = "Please enter the barangay.";
+  if (values.address.provinceCode && !valid.province) errors.province = "Please choose a province.";
+  if (values.address.cityCode && !valid.city) errors.city = address.message;
+
+  const enabled = {
+    firstName: true,
+    lastName: valid.firstName,
+    email: valid.firstName && valid.lastName,
+    contact: valid.firstName && valid.lastName && valid.email,
+    password: valid.firstName && valid.lastName && valid.email && valid.contact,
+    confirmPassword: valid.firstName && valid.lastName && valid.email && valid.contact && valid.password,
+    fullAddress: valid.firstName && valid.lastName && valid.email && valid.contact && valid.password && valid.confirmPassword,
+    street: valid.firstName && valid.lastName && valid.email && valid.contact && valid.password && valid.confirmPassword && valid.fullAddress,
+    barangay: valid.firstName && valid.lastName && valid.email && valid.contact && valid.password && valid.confirmPassword && valid.fullAddress && valid.street,
+    province: valid.firstName && valid.lastName && valid.email && valid.contact && valid.password && valid.confirmPassword && valid.fullAddress && valid.street && valid.barangay,
+    city: valid.firstName && valid.lastName && valid.email && valid.contact && valid.password && valid.confirmPassword && valid.fullAddress && valid.street && valid.barangay && valid.province
+  };
+
+  const canSendVerificationCode = Boolean(validateGmailAddress(values.email).ok && emailChecked && !emailChecking && !emailExists);
+  const canRegister = Boolean(
+    canSendVerificationCode &&
+    emailVerified &&
+    Number(verificationExpiresIn || 0) > 0 &&
+    valid.firstName &&
+    valid.lastName &&
+    valid.contact &&
+    valid.password &&
+    valid.confirmPassword &&
+    address.ok
+  );
+
+  return {
+    values,
+    errors,
+    valid,
+    enabled,
+    canSendVerificationCode,
+    canRegister
+  };
 }
 
 export function buildCheckoutPrefill(data = {}) {
@@ -167,7 +285,8 @@ export function mergeOrdersByOrderNumber(orders = []) {
         ...order,
         id,
         items: [...(order.items || [])],
-        total: Number(order.total || 0)
+        total: Number(order.total || 0),
+        preparation: order.preparation || null,
       });
       continue;
     }
@@ -175,6 +294,10 @@ export function mergeOrdersByOrderNumber(orders = []) {
     existing.total = Number(existing.total || 0) + Number(order.total || 0);
     existing.status = order.status || existing.status;
     existing.paymentStatus = order.paymentStatus || existing.paymentStatus;
+    existing.paymentMethod = order.paymentMethod || existing.paymentMethod;
+    existing.paymentMethodKey = order.paymentMethodKey || existing.paymentMethodKey;
+    existing.preparation = order.preparation || existing.preparation;
+    existing.preparationCompleted = order.preparationCompleted === true || existing.preparationCompleted === true;
     existing.createdAt = existing.createdAt || order.createdAt;
     existing.customerName = existing.customerName || order.customerName;
   }

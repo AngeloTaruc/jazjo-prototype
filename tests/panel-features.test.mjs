@@ -6,6 +6,9 @@ const staffSource = fs.readFileSync("frontend/customer/src/StaffPanel.jsx", "utf
 const adminSource = fs.readFileSync("frontend/customer/src/AdminPanel.jsx", "utf8");
 const apiSource = fs.readFileSync("frontend/customer/src/lib/api.js", "utf8");
 const serverSource = fs.readFileSync("server/index.mjs", "utf8");
+const staffMigrationSource = fs.existsSync("sql/2026-06-26_staff_accounts.sql")
+  ? fs.readFileSync("sql/2026-06-26_staff_accounts.sql", "utf8")
+  : "";
 
 test("staff orders expose full order editing", () => {
   assert.match(apiSource, /apiUpdateOrderDetails/);
@@ -67,4 +70,68 @@ test("staff dashboard loads data from staff-accessible endpoints", () => {
   assert.match(staffSource, /setData\(\{\s*orders:/);
   assert.match(staffSource, /lowStock:/);
   assert.match(staffSource, /lowStockCount:/);
+});
+
+test("admin and staff surfaces display fulfillment type", () => {
+  assert.match(apiSource, /fulfillmentType/);
+  assert.match(adminSource, /Fulfillment/);
+  assert.match(adminSource, /fulfillmentType/);
+  assert.match(staffSource, /Fulfillment/);
+  assert.match(staffSource, /fulfillmentType/);
+  assert.match(serverSource, /fulfillmentType: order\.fulfillment_type/);
+});
+
+test("admin manages staff accounts from an admin-only page", () => {
+  assert.match(adminSource, /Staff Accounts/);
+  assert.match(adminSource, /AdminStaffAccountsPage/);
+  assert.match(adminSource, /apiAdminStaffAccounts/);
+  assert.match(adminSource, /apiAdminCreateStaffAccount/);
+  assert.match(adminSource, /apiAdminUpdateStaffAccount/);
+  assert.match(adminSource, /apiAdminDisableStaffAccount/);
+  assert.match(adminSource, /apiAdminResetStaffPassword/);
+  assert.match(adminSource, /Confirm Password/);
+  assert.match(adminSource, /Email is already registered/);
+
+  assert.match(apiSource, /apiAdminStaffAccounts/);
+  assert.match(apiSource, /\/api\/panel\/admin\/staff/);
+  assert.match(apiSource, /reset-password/);
+
+  assert.match(serverSource, /listStaffAccounts/);
+  assert.match(serverSource, /createStaffAccount/);
+  assert.match(serverSource, /updateStaffAccount/);
+  assert.match(serverSource, /disableStaffAccount/);
+  assert.match(serverSource, /resetStaffPassword/);
+  assert.match(serverSource, /\/api\/panel\/admin\/staff/);
+  assert.match(serverSource, /requireAuth\(req, \["admin"\]\)/);
+  assert.match(serverSource, /assertProfileIsActive/);
+
+  assert.match(staffMigrationSource, /add column if not exists is_active/);
+});
+
+test("staff account editor uses readable inputs and centered reset modal", () => {
+  const staffPage = adminSource.slice(
+    adminSource.indexOf("function AdminStaffAccountsPage"),
+    adminSource.indexOf("function AdminRewardsPage")
+  );
+
+  assert.match(staffPage, /function StaffAccountInput/);
+  assert.match(staffPage, /text-\[var\(--text-secondary\)\]/);
+  assert.match(staffPage, /bg-\[var\(--bg-input\)\]/);
+  assert.match(staffPage, /onValueChange/);
+  assert.doesNotMatch(staffPage, /<HeroInput\s+label="Name"/);
+  assert.match(staffPage, /<Modal\.Backdrop>/);
+  assert.match(staffPage, /<Modal\.Container size="sm">/);
+});
+
+test("staff account form lets admins type before showing validation errors", () => {
+  const staffPage = adminSource.slice(
+    adminSource.indexOf("function AdminStaffAccountsPage"),
+    adminSource.indexOf("function AdminRewardsPage")
+  );
+
+  assert.match(staffPage, /const \[touched, setTouched\] = useState\(\{\}\)/);
+  assert.match(staffPage, /const \[submitted, setSubmitted\] = useState\(false\)/);
+  assert.match(staffPage, /visibleErrors/);
+  assert.match(staffPage, /onBlur=\{\(\) => touchField\("email"\)\}/);
+  assert.doesNotMatch(staffPage, /Object\.keys\(errors\)\.length > 0/);
 });

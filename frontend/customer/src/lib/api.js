@@ -74,6 +74,11 @@ export async function apiRegister(payload) {
   });
 }
 
+export async function apiCheckRegistrationEmail(email) {
+  const params = new URLSearchParams({ email: String(email || "") });
+  return request(`/api/auth/check-email?${params.toString()}`);
+}
+
 export async function apiRequestRegistrationCode(email) {
   return request("/api/auth/register/verification-code", {
     method: "POST",
@@ -257,12 +262,32 @@ export async function apiUpdateOrderDetails(orderCode, payload) {
   return data.order ? normalizeOrder(data.order) : null;
 }
 
+export async function apiUpdateOrderPreparation(orderCode, items) {
+  const data = await request(`/api/orders/${encodeURIComponent(orderCode)}/preparation`, {
+    method: "PATCH",
+    body: JSON.stringify({ items })
+  });
+  return data.order ? normalizeOrder(data.order) : null;
+}
+
+export async function apiPrepareOrder(orderCode) {
+  const data = await request(`/api/orders/${encodeURIComponent(orderCode)}/prepare`, {
+    method: "POST"
+  });
+  return data.order ? normalizeOrder(data.order) : null;
+}
+
+export async function apiOrderInvoice(orderCode) {
+  const data = await request(`/api/orders/${encodeURIComponent(orderCode)}/invoice`);
+  return data.invoice || null;
+}
+
 export async function apiAdminDashboard() {
   const data = await request("/api/panel/admin/dashboard");
   const orders = mergeOrdersByOrderNumber((data.orders || []).map(normalizeOrder));
   const recentOrders = mergeOrdersByOrderNumber((data.recentOrders || []).map(normalizeOrder));
   const todayOrders = mergeOrdersByOrderNumber((data.todayOrders || []).map(normalizeOrder));
-  return { ...data, orders, recentOrders, todayOrders };
+  return { ...data, orders, recentOrders, todayOrders, lowStock: data.lowStock || [], outOfStock: data.outOfStock || [] };
 }
 
 export async function apiAdminOrders({ page = 1, perPage = 10, status = "All", search = "" } = {}) {
@@ -381,6 +406,37 @@ export async function apiAdminCustomers() {
   return request("/api/panel/admin/customers");
 }
 
+export async function apiAdminStaffAccounts() {
+  return request("/api/panel/admin/staff");
+}
+
+export async function apiAdminCreateStaffAccount(payload) {
+  return request("/api/panel/admin/staff", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function apiAdminUpdateStaffAccount(userId, payload) {
+  return request(`/api/panel/admin/staff/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function apiAdminDisableStaffAccount(userId) {
+  return request(`/api/panel/admin/staff/${encodeURIComponent(userId)}/disable`, {
+    method: "POST"
+  });
+}
+
+export async function apiAdminResetStaffPassword(userId, payload) {
+  return request(`/api/panel/admin/staff/${encodeURIComponent(userId)}/reset-password`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
 export async function apiAdminRewards() {
   return request("/api/panel/admin/rewards");
 }
@@ -400,6 +456,13 @@ export async function apiAdminReports() {
   return request("/api/panel/admin/reports");
 }
 
+export async function apiAdminReportDetail(reportKey, { range = "all", from = "", to = "" } = {}) {
+  const params = new URLSearchParams({ range });
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  return request(`/api/panel/admin/reports/${encodeURIComponent(reportKey)}?${params.toString()}`);
+}
+
 export async function apiAdminDelivery() {
   return request("/api/panel/admin/delivery");
 }
@@ -413,32 +476,102 @@ export async function apiStaffInventory() {
   return request("/api/panel/staff/inventory");
 }
 
+export async function apiStaffCategories() {
+  return request("/api/panel/staff/categories");
+}
+
+export async function apiStaffCreateCategory(name) {
+  return request("/api/panel/staff/categories", {
+    method: "POST",
+    body: JSON.stringify({ name })
+  });
+}
+
+export async function apiStaffDeleteCategory(name) {
+  return request(`/api/panel/staff/categories/${encodeURIComponent(name)}`, {
+    method: "DELETE"
+  });
+}
+
+export async function apiStaffCreateProduct(payload) {
+  return request("/api/panel/staff/inventory/products", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function apiStaffUploadProductImage(dataUrl, fileName) {
+  return request("/api/panel/staff/inventory/product-image", {
+    method: "POST",
+    body: JSON.stringify({ dataUrl, fileName })
+  });
+}
+
+export async function apiStaffRestock(productName, addCases) {
+  return request("/api/panel/staff/inventory/restock", {
+    method: "POST",
+    body: JSON.stringify({ productName, addCases })
+  });
+}
+
+export async function apiStaffUpdateProduct(name, payload) {
+  return request(`/api/panel/staff/inventory/products/by-name/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function apiStaffDeleteProduct(name) {
+  return request(`/api/panel/staff/inventory/products/by-name/${encodeURIComponent(name)}`, {
+    method: "DELETE"
+  });
+}
+
 export async function apiStaffDelivery() {
   return request("/api/panel/staff/delivery");
 }
 
 export function normalizeOrder(order) {
+  const normalizedItems = (order.items || order.order_items || []).map((it) => ({
+    productId: it.sku || it.product_id || it.productId,
+    name: it.name,
+    price: Number(it.price ?? it.unit_price ?? 0),
+    qty: Number(it.qty || 0),
+    packLabel: it.packLabel || it.pack_label || "",
+    caseQty: Number(it.caseQty ?? it.case_qty ?? 1),
+    img: it.img || it.image_url || placeholderImage(it.name)
+  }));
+  const fallbackPreparationItems = normalizedItems.map((item) => ({
+    productId: item.productId,
+    name: item.name,
+    qty: Number(item.qty || 0),
+    prepared: false,
+    preparedAt: "",
+    preparedBy: "",
+    validationMessage: ""
+  }));
   return {
+    dbId: order.dbId || order.db_id || order.id,
     id: order.id || order.order_code,
     createdAt: order.createdAt || order.created_at || "",
     customerName: order.customerName || order.customer_name || "Customer",
     contact: order.contact || "",
     address: order.address || "",
-    paymentMethod: order.paymentMethod || order.payment_method || "QRPH",
+    fulfillmentType: order.fulfillmentType || order.fulfillment_type || "delivery",
+    paymentMethod: order.paymentMethod || order.payment_method || "Bank QR PH",
+    paymentMethodKey: order.paymentMethodKey || order.payment_method_key || "bank_qr_ph",
     paymentStatus: order.paymentStatus || order.payment_status || "",
     subtotal: Number(order.subtotal || 0),
     deliveryFee: Number(order.deliveryFee ?? order.delivery_fee ?? 0),
+    discountAmount: Number(order.discountAmount ?? order.discount_amount ?? 0),
     total: Number(order.total || 0),
     status: statusLabel(order.status),
-    items: (order.items || order.order_items || []).map((it) => ({
-      productId: it.sku || it.product_id || it.productId,
-      name: it.name,
-      price: Number(it.price ?? it.unit_price ?? 0),
-      qty: Number(it.qty || 0),
-      packLabel: it.packLabel || it.pack_label || "",
-      caseQty: Number(it.caseQty ?? it.case_qty ?? 1),
-      img: it.img || it.image_url || placeholderImage(it.name)
-    })),
+    items: normalizedItems,
+    preparedAt: order.preparedAt || order.prepared_at || "",
+    preparedBy: order.preparedBy || order.prepared_by || "",
+    preparationCompleted: order.preparationCompleted === true || order.preparation_completed === true,
+    preparation: order.preparation || { items: fallbackPreparationItems, preparedItems: 0, totalItems: fallbackPreparationItems.length, percent: 0, completed: false },
+    paidAt: order.paidAt || order.paid_at || "",
     statusEvents: order.status_events || []
   };
 }

@@ -4,8 +4,10 @@ import { Button } from "@heroui/react/button";
 import { Card } from "@heroui/react/card";
 import { Chip } from "@heroui/react/chip";
 import { Input as HeroInput } from "@heroui/react/input";
+import { ListBox } from "@heroui/react/list-box";
 import { Modal } from "@heroui/react/modal";
 import { Pagination } from "@heroui/react/pagination";
+import { Select } from "@heroui/react/select";
 import { Skeleton } from "@heroui/react/skeleton";
 import { Tabs } from "@heroui/react/tabs";
 import { Toast } from "@heroui/react/toast";
@@ -42,9 +44,14 @@ import {
   apiAdminSales,
   apiAdminReports,
   apiAdminDelivery,
+  apiAdminStaffAccounts,
+  apiAdminCreateStaffAccount,
+  apiAdminUpdateStaffAccount,
+  apiAdminDisableStaffAccount,
+  apiAdminResetStaffPassword,
+  apiCheckRegistrationEmail,
   apiAdminDeleteOrder,
   apiAdminBulkDeleteOrdersByStatus,
-  apiAdminCategories,
   apiAdminCreateCategory,
   apiAdminDeleteCategory,
   apiAdminCreateProduct,
@@ -53,9 +60,39 @@ import {
   apiAdminUpdateProduct,
   apiAdminDeleteProduct,
   apiAdminRedeemReward,
+  apiAdminReportDetail,
+  apiOrderInvoice,
+  apiPrepareOrder,
+  apiUpdateOrderDetails,
+  apiUpdateOrderPreparation,
   apiUpdateOrderStatus
 } from "./lib/api.js";
-import { buildCsvContent, clearSession, createDemandForecast, formatQty, getToken, money, statusLabel } from "./lib/customerLogic.js";
+import {
+  buildCsvContent,
+  clearSession,
+  createDemandForecast,
+  formatQty,
+  getToken,
+  money,
+  normalizeContactInput,
+  paymentStatusLabel,
+  statusLabel,
+  validateContact,
+  validateGmailAddress,
+  validatePassword
+} from "./lib/customerLogic.js";
+import {
+  computeBestSeller,
+  filterOrdersByRange,
+  formatFulfillmentType,
+  fulfillmentColor,
+  getPreparationSummary,
+  paymentMethodColor,
+  paymentMethodLabel,
+  paymentStatusColor,
+  paymentStatusText,
+  statusColor,
+} from "./lib/panelLogic.js";
 
 const CardHeader = Card.Header;
 const CardBody = Card.Content;
@@ -87,8 +124,8 @@ function Th({ children }) {
   return <th className="px-3 py-3">{children}</th>;
 }
 
-function Tr({ children }) {
-  return <tr className="border-b border-white/5 transition-colors hover:bg-white/[.02]">{children}</tr>;
+function Tr({ children, className = "", ...props }) {
+  return <tr {...props} className={`border-b border-white/5 transition-colors hover:bg-white/[.02] ${className}`}>{children}</tr>;
 }
 
 function Td({ children, className = "" }) {
@@ -161,6 +198,150 @@ function collapseDeliveryTracks(tracks = []) {
   }));
 }
 
+function OrderStatusChip({ status }) {
+  return <Chip color={statusColor(status)} variant="flat" size="sm">{statusLabel(status)}</Chip>;
+}
+
+function PaymentStatusChip({ order }) {
+  const label = paymentStatusText(order);
+  return <Chip color={paymentStatusColor(label)} variant="flat" size="sm">{label}</Chip>;
+}
+
+function PaymentMethodChip({ method }) {
+  const label = paymentMethodLabel(method);
+  return <Chip color={paymentMethodColor(method)} variant="flat" size="sm">{label}</Chip>;
+}
+
+function FulfillmentChip({ value }) {
+  return <Chip color={fulfillmentColor(value)} variant="flat" size="sm">{formatFulfillmentType(value)}</Chip>;
+}
+
+function DashboardRangeSelect({ value, onChange, options, ariaLabel }) {
+  const selectedLabel = options.find((option) => option.value === value)?.label || options[0]?.label || "Select";
+  return (
+    <Select
+      aria-label={ariaLabel}
+      selectedKey={value}
+      onSelectionChange={(key) => onChange(String(key))}
+      fullWidth
+      variant="bordered"
+    >
+      <Select.Trigger className="min-h-8 rounded-lg border border-white/10 bg-slate-950/80 px-2 text-left text-xs font-semibold text-slate-200">
+        <Select.Value>{selectedLabel}</Select.Value>
+        <Select.Indicator />
+      </Select.Trigger>
+      <Select.Popover placement="bottom start" className="min-w-40 rounded-xl border border-white/10 bg-slate-950 p-1 shadow-2xl shadow-black/40">
+        <ListBox aria-label={ariaLabel} selectionMode="single">
+          {options.map((option) => (
+            <ListBox.Item
+              id={option.value}
+              key={option.value}
+              textValue={option.label}
+              className="rounded-lg px-3 py-2 text-sm text-slate-100 data-[selected=true]:bg-emerald-500 data-[selected=true]:text-slate-950"
+            >
+              {option.label}
+            </ListBox.Item>
+          ))}
+        </ListBox>
+      </Select.Popover>
+    </Select>
+  );
+}
+
+function formatPrintableDate(value) {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
+}
+
+function openPrintableHtml(html, { onError } = {}) {
+  const iframe = document.createElement("iframe");
+  iframe.title = "Printable document";
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.srcdoc = html;
+  iframe.onload = () => {
+    const win = iframe.contentWindow;
+    if (!win) {
+      iframe.remove();
+      onError?.();
+      return;
+    }
+    win.focus();
+    win.print();
+    setTimeout(() => iframe.remove(), 1000);
+  };
+  document.body.appendChild(iframe);
+}
+
+function buildInvoiceHtml(invoice) {
+  const rows = (invoice?.items || []).map((item) => `
+    <tr>
+      <td>${String(item.product || "")}</td>
+      <td>${Number(item.quantity || 0)}</td>
+      <td>PHP ${Number(item.unitPrice || 0).toLocaleString("en-PH")}</td>
+      <td>PHP ${Number(item.lineTotal || 0).toLocaleString("en-PH")}</td>
+    </tr>
+  `).join("");
+  return `
+    <html>
+      <head>
+        <title>${invoice?.invoiceNumber || "Sales Invoice"}</title>
+        <style>
+          @page { size: A4; margin: 14mm; }
+          body { font-family: Arial, sans-serif; color: #0f172a; margin: 0; }
+          header { display:flex; justify-content:space-between; gap:24px; border-bottom:2px solid #0f172a; padding-bottom:12px; }
+          h1,h2,p { margin:0; }
+          .muted { color:#475569; font-size:12px; }
+          .grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; margin:18px 0; }
+          .card { border:1px solid #cbd5e1; border-radius:12px; padding:12px; }
+          table { width:100%; border-collapse:collapse; margin-top:16px; font-size:12px; }
+          th,td { border:1px solid #cbd5e1; padding:8px; text-align:left; }
+          th { background:#e2e8f0; }
+          .totals { margin-top:18px; width:320px; margin-left:auto; }
+          .totals div { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #e2e8f0; }
+          .grand { font-weight:800; font-size:14px; }
+        </style>
+      </head>
+      <body>
+        <header>
+          <div>
+            <h1>Jazjo Beverages</h1>
+            <p class="muted">${invoice?.company?.address || ""}</p>
+            <p class="muted">${invoice?.company?.contact || ""}</p>
+          </div>
+          <div>
+            <h2>Sales Invoice</h2>
+            <p class="muted">Invoice No: ${invoice?.invoiceNumber || "-"}</p>
+            <p class="muted">Order No: ${invoice?.orderNumber || "-"}</p>
+            <p class="muted">Date: ${formatPrintableDate(invoice?.createdAt)}</p>
+          </div>
+        </header>
+        <div class="grid">
+          <div class="card"><strong>Customer</strong><p class="muted">${invoice?.customer || "-"}</p></div>
+          <div class="card"><strong>Payment Method</strong><p class="muted">${invoice?.paymentMethod || "-"}</p></div>
+          <div class="card"><strong>Fulfillment</strong><p class="muted">${invoice?.fulfillmentType || "-"}</p></div>
+          <div class="card"><strong>Order Status</strong><p class="muted">${invoice?.orderStatus || "-"} / ${paymentStatusLabel(invoice?.paymentStatus || "", invoice?.orderStatus || "")}</p></div>
+        </div>
+        <table>
+          <thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="4">No items</td></tr>'}</tbody>
+        </table>
+        <div class="totals">
+          <div><span>Subtotal</span><strong>PHP ${Number(invoice?.subtotal || 0).toLocaleString("en-PH")}</strong></div>
+          <div><span>Delivery Fee</span><strong>PHP ${Number(invoice?.deliveryFee || 0).toLocaleString("en-PH")}</strong></div>
+          <div><span>Discount</span><strong>PHP ${Number(invoice?.discount || 0).toLocaleString("en-PH")}</strong></div>
+          <div class="grand"><span>Grand Total</span><strong>PHP ${Number(invoice?.grandTotal || 0).toLocaleString("en-PH")}</strong></div>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
 export default function AdminPanel({ isDark, onToggleTheme }) {
   const [route, setRoute] = useState(() => routeFromHash().replace("admin/", ""));
   const [message, setMessage] = useState("");
@@ -194,6 +375,7 @@ export default function AdminPanel({ isDark, onToggleTheme }) {
     { id: "orders", label: "Orders", icon: <Package size={18} /> },
     { id: "delivery", label: "Delivery", icon: <Truck size={18} /> },
     { id: "customers", label: "Customers", icon: <Users size={18} /> },
+    { id: "staff", label: "Staff Accounts", icon: <Users size={18} /> },
     { id: "rewards", label: "Rewards", icon: <Gift size={18} /> },
     { id: "reports", label: "Reports", icon: <BarChart3 size={18} /> }
   ];
@@ -279,6 +461,7 @@ export default function AdminPanel({ isDark, onToggleTheme }) {
               {route === "orders" && <AdminOrdersPage setMessage={setMessage} />}
               {route === "delivery" && <AdminDeliveryPage setMessage={setMessage} />}
               {route === "customers" && <AdminCustomersPage setMessage={setMessage} />}
+              {route === "staff" && <AdminStaffAccountsPage setMessage={setMessage} />}
               {route === "rewards" && <AdminRewardsPage setMessage={setMessage} />}
               {route === "reports" && <AdminReportsPage setMessage={setMessage} />}
             </motion.div>
@@ -293,6 +476,8 @@ function AdminDashboardPage({ setMessage }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState(null);
+  const [orderRange, setOrderRange] = useState("all");
+  const [sellerRange, setSellerRange] = useState("all");
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -321,29 +506,50 @@ function AdminDashboardPage({ setMessage }) {
   const customers = data?.customers || [];
   const todayOrders = data?.todayOrders || orders.filter((order) => String(order.createdAtRaw || order.createdAt || "").slice(0, 10) === new Date().toISOString().slice(0, 10));
   const lowStockRows = data?.lowStock || [];
+  const outOfStockRows = data?.outOfStock || [];
+  const filteredOrders = filterOrdersByRange(orders, orderRange);
+  const filteredSellerOrders = filterOrdersByRange(orders, sellerRange);
+  const bestSeller = computeBestSeller(filteredSellerOrders);
   const detailRows = {
-    orders,
+    orders: filteredOrders,
     customers,
     todaySales: todayOrders,
-    bestSeller: orders.filter((order) => (order.items || []).some((item) => item.name === kpis.bestSeller)),
-    lowStock: lowStockRows
+    bestSeller: filteredSellerOrders.filter((order) => (order.items || []).some((item) => item.name === bestSeller.name)),
+    lowStock: lowStockRows,
+    outOfStock: outOfStockRows
   };
   const detailTitle = {
     orders: "Order List",
     customers: "Customer List",
     todaySales: "Sales Today",
     bestSeller: "Best Seller Orders",
-    lowStock: "Low Stock Products"
+    lowStock: "Low Stock Products",
+    outOfStock: "Out of Stock Products"
   };
+  const orderRangeOptions = [
+    { value: "today", label: "Today" },
+    { value: "week", label: "Week" },
+    { value: "month", label: "Month" },
+    { value: "year", label: "Year" },
+    { value: "all", label: "All Time" },
+  ];
+  const sellerRangeOptions = [
+    { value: "today", label: "Today" },
+    { value: "week", label: "Week" },
+    { value: "month", label: "Month" },
+    { value: "year", label: "Year" },
+    { value: "all", label: "All" },
+  ];
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard label="Total Orders" value={kpis.totalOrders ?? kpis.transactions ?? orders.length} icon={<ShoppingCart size={20} />} onPress={() => setDetail("orders")} />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard label="Total Orders" value={filteredOrders.length} icon={<ShoppingCart size={20} />} onPress={() => setDetail("orders")} footer={<DashboardRangeSelect ariaLabel="Total orders range" value={orderRange} onChange={setOrderRange} options={orderRangeOptions} />} />
         <KpiCard label="Total Customers" value={kpis.totalCustomers ?? customers.length} icon={<Users size={20} />} onPress={() => setDetail("customers")} />
         <KpiCard label="Sales Today" value={money(kpis.salesToday || 0)} icon={<TrendingUp size={20} />} onPress={() => setDetail("todaySales")} />
-        <KpiCard label="Best Seller" value={kpis.bestSeller || "N/A"} icon={<BarChart3 size={20} />} onPress={() => setDetail("bestSeller")} />
+        <KpiCard label="Best Seller" value={bestSeller.name || "N/A"} icon={<BarChart3 size={20} />} onPress={() => setDetail("bestSeller")} footer={<DashboardRangeSelect ariaLabel="Best seller range" value={sellerRange} onChange={setSellerRange} options={sellerRangeOptions} />} />
         <KpiCard label="Total Sales" value={money(kpis.totalSales)} icon={<CreditCard size={20} />} />
         <KpiCard label="Low Stock" value={kpis.lowStockCount || 0} icon={<Warehouse size={20} />} onPress={() => setDetail("lowStock")} />
+        <KpiCard label="Out of Stock" value={kpis.outOfStockCount || 0} icon={<Box size={20} />} onPress={() => setDetail("outOfStock")} />
       </div>
       <Card>
         <CardHeader><h2 className="text-lg font-black">Recent Orders</h2></CardHeader>
@@ -391,14 +597,15 @@ function AdminDashboardPage({ setMessage }) {
                         ))}
                       </TBody>
                     </Table>
-                  ) : detail === "lowStock" ? (
+                  ) : detail === "lowStock" || detail === "outOfStock" ? (
                     <Table>
-                      <THead><Th>PRODUCT</Th><Th>STOCK</Th><Th>STATUS</Th></THead>
+                      <THead><Th>PRODUCT</Th><Th>CURRENT STOCK</Th><Th>CATEGORY</Th><Th>STATUS</Th></THead>
                       <TBody>
-                        {(detailRows.lowStock || []).map((product, idx) => (
+                        {(detailRows[detail] || []).map((product, idx) => (
                           <Tr key={product.id || product.name || idx}>
                             <Td>{product.name}</Td>
                             <Td>{formatQty(product.stockCases)} cases</Td>
+                            <Td>{product.category || "-"}</Td>
                             <Td>{product.status || "Low Stock"}</Td>
                           </Tr>
                         ))}
@@ -534,6 +741,10 @@ function AdminOrdersPage({ setMessage }) {
   const [deletingOrder, setDeletingOrder] = useState("");
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [invoice, setInvoice] = useState(null);
+  const [loadingInvoice, setLoadingInvoice] = useState(false);
+  const [savingPreparation, setSavingPreparation] = useState(false);
+  const [submittingPrepare, setSubmittingPrepare] = useState(false);
   const perPage = 10;
   const statuses = ["All", "Pending Payment", "Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered", "Cancelled"];
   const [pagination, setPagination] = useState({ page: 1, perPage, total: 0, totalPages: 1 });
@@ -571,7 +782,11 @@ function AdminOrdersPage({ setMessage }) {
     try {
       await apiUpdateOrderStatus(orderCode, newStatus);
       setMessage(`Order ${orderCode} marked as ${newStatus}.`);
-      load();
+      await load();
+      if (selectedOrder?.id === orderCode) {
+        const refreshed = await apiAdminOrders({ page: 1, perPage: 10000, status: "All", search: orderCode });
+        setSelectedOrder((refreshed.orders || []).find((order) => order.id === orderCode) || null);
+      }
     } catch (err) {
       setMessage(`Error: ${err.message}`);
     }
@@ -628,6 +843,48 @@ function AdminOrdersPage({ setMessage }) {
       "Out for Delivery": "Delivered"
     };
     return map[label] || null;
+  };
+  const openInvoice = async (orderCode) => {
+    setLoadingInvoice(true);
+    try {
+      const data = await apiOrderInvoice(orderCode);
+      setInvoice(data);
+      openPrintableHtml(buildInvoiceHtml(data));
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setLoadingInvoice(false);
+    }
+  };
+  const updatePreparation = async (productId, prepared) => {
+    if (!selectedOrder) return;
+    const currentItems = getPreparationSummary(selectedOrder).items;
+    const nextItems = currentItems.map((item) => item.productId === productId ? { ...item, prepared } : item);
+    setSavingPreparation(true);
+    try {
+      const order = await apiUpdateOrderPreparation(selectedOrder.id, nextItems.map((item) => ({ productId: item.productId, prepared: item.prepared })));
+      setSelectedOrder(order);
+      setMessage("Preparation progress updated.");
+      await load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setSavingPreparation(false);
+    }
+  };
+  const submitPreparation = async () => {
+    if (!selectedOrder) return;
+    setSubmittingPrepare(true);
+    try {
+      const order = await apiPrepareOrder(selectedOrder.id);
+      setSelectedOrder(order);
+      setMessage(`Order ${selectedOrder.id} moved to Preparing.`);
+      await load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setSubmittingPrepare(false);
+    }
   };
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
@@ -686,7 +943,7 @@ function AdminOrdersPage({ setMessage }) {
           </div>
           <div className="overflow-x-auto">
             <Table>
-              <THead><Th>ORDER ID</Th><Th>DATE</Th><Th>CUSTOMER</Th><Th>TOTAL</Th><Th>STATUS</Th><Th>ACTION</Th></THead>
+              <THead><Th>ORDER ID</Th><Th>DATE</Th><Th>CUSTOMER</Th><Th>FULFILLMENT</Th><Th>PAYMENT</Th><Th>TOTAL</Th><Th>STATUS</Th><Th>ACTION</Th></THead>
               <TBody>
                 {paged.map((order, idx) => {
                   const next = nextStatus(order.status);
@@ -695,20 +952,25 @@ function AdminOrdersPage({ setMessage }) {
                       <Td><span className="font-semibold">{order.id}</span></Td>
                       <Td className="text-sm text-slate-400">{order.createdAt || "-"}</Td>
                       <Td>{order.customerName || "Customer"}</Td>
+                      <Td><FulfillmentChip value={order.fulfillmentType} /></Td>
+                      <Td><PaymentMethodChip method={order.paymentMethod} /></Td>
                       <Td className="font-semibold">{money(order.total)}</Td>
                       <Td>
                         <div className="flex items-center gap-2">
-                          <Chip color={statusLabel(order.status) === "Delivered" ? "success" : statusLabel(order.status) === "Cancelled" ? "danger" : "warning"} variant="flat" size="sm">{statusLabel(order.status)}</Chip>
-                          {order.paymentStatus === "paid" || order.payment_status === "paid" ? <Chip color="success" size="sm" variant="flat">Paid</Chip> : null}
+                          <OrderStatusChip status={order.status} />
+                          <PaymentStatusChip order={order} />
                         </div>
                       </Td>
                       <Td>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           {next ? (
                             <Button size="sm" color="success" variant="flat" onPress={() => updateStatus(order.id, next)}>
                               {next}
                             </Button>
                           ) : null}
+                          <Button size="sm" variant="flat" onPress={() => openInvoice(order.id)} isLoading={loadingInvoice && invoice?.orderNumber !== order.id}>
+                            Sales Invoice
+                          </Button>
                           <Tooltip content="View order details" placement="top" showArrow>
                             <Button size="sm" variant="light" isIconOnly onPress={() => setSelectedOrder(order)}>
                               <Eye size={14} />
@@ -758,25 +1020,31 @@ function AdminOrdersPage({ setMessage }) {
                   </div>
                   <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
                     <p className="text-xs font-bold uppercase text-slate-500">Payment</p>
-                    <p className="mt-1 font-semibold text-white">{selectedOrder?.paymentMethod || "QRPH"}</p>
-                    <p className="text-sm text-slate-400">{selectedOrder?.paymentStatus || "pending"}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <PaymentMethodChip method={selectedOrder?.paymentMethod} />
+                      <PaymentStatusChip order={selectedOrder} />
+                    </div>
                   </div>
                   <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
                     <p className="text-xs font-bold uppercase text-slate-500">Date</p>
                     <p className="mt-1 text-sm font-semibold text-white">{selectedOrder?.createdAt || "-"}</p>
                   </div>
                   <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                    <p className="text-xs font-bold uppercase text-slate-500">Fulfillment</p>
+                    <div className="mt-2"><FulfillmentChip value={selectedOrder?.fulfillmentType} /></div>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
                     <p className="text-xs font-bold uppercase text-slate-500">Status</p>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      <Chip color={statusLabel(selectedOrder?.status) === "Delivered" ? "success" : statusLabel(selectedOrder?.status) === "Cancelled" ? "danger" : "warning"} variant="flat" size="sm">
-                        {statusLabel(selectedOrder?.status)}
-                      </Chip>
-                      {selectedOrder?.paymentStatus === "paid" || selectedOrder?.payment_status === "paid" ? <Chip color="success" size="sm" variant="flat">Paid</Chip> : null}
+                      <OrderStatusChip status={selectedOrder?.status} />
+                      <PaymentStatusChip order={selectedOrder} />
                     </div>
                   </div>
                 </div>
                 <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
-                  <p className="text-xs font-bold uppercase text-slate-500">Delivery Address</p>
+                  <p className="text-xs font-bold uppercase text-slate-500">
+                    {String(selectedOrder?.fulfillmentType || "").toLowerCase() === "pickup" ? "Pickup Location" : "Delivery Address"}
+                  </p>
                   <p className="mt-1 text-sm text-slate-200">{selectedOrder?.address || "No address"}</p>
                 </div>
                 <div className="rounded-xl border border-white/10 bg-white/[.04] p-3">
@@ -799,6 +1067,47 @@ function AdminOrdersPage({ setMessage }) {
                     ) : null}
                   </div>
                 </div>
+                {statusLabel(selectedOrder?.status) === "Order Placed" || statusLabel(selectedOrder?.status) === "Preparing" ? (
+                  <div className="rounded-xl border border-emerald-400/20 bg-emerald-500/[.05] p-4">
+                    {getPreparationSummary(selectedOrder).items.length === 0 ? (
+                      <p className="mb-4 text-sm text-slate-300">Preparation items are loading from the order details.</p>
+                    ) : null}
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold uppercase text-emerald-300">Order Preparation</p>
+                        <p className="mt-1 text-sm text-slate-300">
+                          {getPreparationSummary(selectedOrder).preparedItems} / {getPreparationSummary(selectedOrder).totalItems} Items Prepared
+                        </p>
+                      </div>
+                      <Chip color="success" variant="flat" size="sm">{getPreparationSummary(selectedOrder).percent}%</Chip>
+                    </div>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+                      <div className="h-full rounded-full bg-emerald-400" style={{ width: `${getPreparationSummary(selectedOrder).percent}%` }} />
+                    </div>
+                    <div className="mt-4 grid gap-3">
+                      {getPreparationSummary(selectedOrder).items.map((item) => (
+                        <label key={item.productId || item.name} className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-3 text-sm">
+                          <div className="flex items-start gap-3">
+                            <input type="checkbox" checked={item.prepared === true} disabled={savingPreparation || submittingPrepare} onChange={(event) => updatePreparation(item.productId, event.target.checked)} className="mt-1 h-4 w-4 accent-emerald-400" />
+                            <div className="min-w-0 flex-1">
+                              <p className="font-semibold text-white">{item.name}</p>
+                              <p className="text-xs text-slate-400">Ordered: {formatQty(item.qty)} Cases</p>
+                              {item.validationMessage ? <p className="mt-1 text-xs font-semibold text-red-400">{item.validationMessage}</p> : null}
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-xs text-slate-400">
+                        {selectedOrder?.preparedBy ? `Prepared by ${selectedOrder.preparedBy}` : "Prepared by will be recorded when the order is fully prepared."}
+                      </div>
+                      <Button color="success" onPress={submitPreparation} isDisabled={!getPreparationSummary(selectedOrder).completed} isLoading={submittingPrepare}>
+                        Prepare Order
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </Modal.Body>
               <Modal.Footer>
                 <Button variant="flat" onPress={() => setSelectedOrder(null)}>Close</Button>
@@ -811,7 +1120,18 @@ function AdminOrdersPage({ setMessage }) {
   );
 }
 
-function AdminInventoryPage({ setMessage }) {
+function AdminInventoryPage({
+  setMessage,
+  inventoryApi = apiAdminInventory,
+  ordersApi = apiAdminOrders,
+  createCategoryApi = apiAdminCreateCategory,
+  deleteCategoryApi = apiAdminDeleteCategory,
+  createProductApi = apiAdminCreateProduct,
+  uploadProductImageApi = apiAdminUploadProductImage,
+  restockApi = apiAdminRestock,
+  updateProductApi = apiAdminUpdateProduct,
+  deleteProductApi = apiAdminDeleteProduct,
+}) {
   const [inventory, setInventory] = useState([]);
   const [lowStock, setLowStock] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -836,7 +1156,7 @@ function AdminInventoryPage({ setMessage }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [result, ordersResult] = await Promise.all([apiAdminInventory(), apiAdminOrders({ perPage: 500 })]);
+      const [result, ordersResult] = await Promise.all([inventoryApi(), ordersApi({ perPage: 500 })]);
       setInventory(result.inventory || []);
       setLowStock(result.lowStock || []);
       setCategories(result.categories || []);
@@ -859,7 +1179,7 @@ function AdminInventoryPage({ setMessage }) {
   const addCategory = async () => {
     if (!addCategoryName.trim()) return;
     try {
-      const result = await apiAdminCreateCategory(addCategoryName.trim());
+      const result = await createCategoryApi(addCategoryName.trim());
       setCategories(result.categories || []);
       setAddCategoryName("");
       setMessage(`Category "${addCategoryName.trim()}" added.`);
@@ -871,7 +1191,7 @@ function AdminInventoryPage({ setMessage }) {
     if (!window.confirm(`Remove category "${name}"? Products in this category will become uncategorized.`)) return;
     setDeletingCategory(name);
     try {
-      const result = await apiAdminDeleteCategory(name);
+      const result = await deleteCategoryApi(name);
       setCategories(result.categories || []);
       setMessage(`Category "${name}" removed.`);
       load();
@@ -899,12 +1219,12 @@ function AdminInventoryPage({ setMessage }) {
     if (!Number.isInteger(quantityPerCase) || quantityPerCase <= 0) return setMessage("Quantity per Case must be a positive integer.");
     setUploading(true);
     try {
-      let imageUrl = "";
+        let imageUrl = "";
       if (productImageFile && productImagePreview) {
-        const uploaded = await apiAdminUploadProductImage(productImagePreview, productImageFile.name);
+        const uploaded = await uploadProductImageApi(productImagePreview, productImageFile.name);
         imageUrl = uploaded?.imageUrl || "";
       }
-      await apiAdminCreateProduct({
+      await createProductApi({
         name: newProduct.name.trim(),
         category: newProduct.category,
         unit: newProduct.unit || "case",
@@ -929,7 +1249,7 @@ function AdminInventoryPage({ setMessage }) {
     if (!restockProduct.name || !restockProduct.addCases) return setMessage("Select a product and enter the stock quantity.");
     if (!Number.isFinite(stockToAdd) || stockToAdd <= 0) return setMessage("Stock quantity must be greater than 0.");
     try {
-      await apiAdminRestock(restockProduct.name, stockToAdd);
+      await restockApi(restockProduct.name, stockToAdd);
       setShowRestock(false);
       setRestockProduct({ name: "", addCases: "" });
       setMessage(`Restocked ${restockProduct.name}.`);
@@ -941,7 +1261,7 @@ function AdminInventoryPage({ setMessage }) {
   const doDelete = async () => {
     if (!confirmDelete) return;
     try {
-      await apiAdminDeleteProduct(confirmDelete.name);
+      await deleteProductApi(confirmDelete.name);
       setConfirmDelete(null);
       setMessage(`Product "${confirmDelete.name}" deleted.`);
       load();
@@ -962,7 +1282,7 @@ function AdminInventoryPage({ setMessage }) {
     try {
       let imageUrl = showEditProduct.image_url?.trim() || null;
       if (editImageFile && editImagePreview) {
-        const uploaded = await apiAdminUploadProductImage(editImagePreview, editImageFile.name);
+        const uploaded = await uploadProductImageApi(editImagePreview, editImageFile.name);
         imageUrl = uploaded?.imageUrl || imageUrl;
       }
       const body = {};
@@ -978,7 +1298,7 @@ function AdminInventoryPage({ setMessage }) {
       }
       body.imageUrl = imageUrl;
       body.isActive = showEditProduct.isActive;
-      await apiAdminUpdateProduct(editOriginalName, body);
+      await updateProductApi(editOriginalName, body);
       setShowEditProduct(null);
       setEditOriginalName("");
       setEditImageFile(null);
@@ -1432,7 +1752,7 @@ function AdminDeliveryPage({ setMessage }) {
             <>
               <div className="overflow-x-auto">
                 <Table>
-                  <THead><Th>ORDER</Th><Th>PRODUCT</Th><Th>QTY</Th><Th>CUSTOMER</Th><Th>STATUS</Th><Th>UPDATED</Th><Th>ACTION</Th></THead>
+                  <THead><Th>ORDER</Th><Th>PRODUCT</Th><Th>QTY</Th><Th>CUSTOMER</Th><Th>FULFILLMENT</Th><Th>PAYMENT</Th><Th>STATUS</Th><Th>UPDATED</Th><Th>ACTION</Th></THead>
                   <TBody>
                     {paged.map((track, idx) => (
                       <Tr key={idx}>
@@ -1449,14 +1769,10 @@ function AdminDeliveryPage({ setMessage }) {
                           </Td>
                         <Td>{formatQty(track.qty)}</Td>
                         <Td>{track.customerName}</Td>
+                        <Td><FulfillmentChip value={track.fulfillmentType} /></Td>
+                        <Td><PaymentMethodChip method={track.paymentMethod} /></Td>
                         <Td>
-                          <Chip
-                            color={statusLabel(track.status) === "Delivered" ? "success" : statusLabel(track.status) === "Cancelled" ? "danger" : "warning"}
-                            variant="flat"
-                            size="sm"
-                          >
-                            {statusLabel(track.status)}
-                          </Chip>
+                          <OrderStatusChip status={track.status} />
                         </Td>
                         <Td className="text-sm text-slate-400">{track.updatedAt || "-"}</Td>
                         <Td>
@@ -1492,12 +1808,11 @@ function AdminDeliveryPage({ setMessage }) {
                         <p className="themed-modal-label text-xs font-bold uppercase">Order Progress</p>
                         <p className="themed-modal-value text-sm">Order: <strong>{selectedDelivery?.orderId || "-"}</strong></p>
                       </div>
-                      <Chip
-                        color={statusLabel(selectedDelivery?.status) === "Delivered" ? "success" : statusLabel(selectedDelivery?.status) === "Cancelled" ? "danger" : "warning"}
-                        variant="flat"
-                      >
-                        {statusLabel(selectedDelivery?.status)}
-                      </Chip>
+                      <div className="flex flex-wrap gap-2">
+                        <FulfillmentChip value={selectedDelivery?.fulfillmentType} />
+                        <PaymentMethodChip method={selectedDelivery?.paymentMethod} />
+                        <OrderStatusChip status={selectedDelivery?.status} />
+                      </div>
                     </div>
                     <DeliveryTimeline status={selectedDelivery?.status} />
                   </CardBody>
@@ -1512,12 +1827,12 @@ function AdminDeliveryPage({ setMessage }) {
                     <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.contact || selectedDelivery?.recipientContact || "-"}</p>
                   </div>
                   <div className="themed-modal-card rounded-xl px-4 py-3">
-                    <p className="delivery-field-label text-xs font-bold uppercase">Delivery Status</p>
-                    <p className="delivery-field-value mt-1 font-semibold">{statusLabel(selectedDelivery?.status) || "-"}</p>
+                    <p className="delivery-field-label text-xs font-bold uppercase">Payment Method</p>
+                    <div className="mt-2"><PaymentMethodChip method={selectedDelivery?.paymentMethod} /></div>
                   </div>
                   <div className="themed-modal-card rounded-xl px-4 py-3">
-                    <p className="delivery-field-label text-xs font-bold uppercase">Delivery Date</p>
-                    <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.deliveryDate || selectedDelivery?.updatedAt || "-"}</p>
+                    <p className="delivery-field-label text-xs font-bold uppercase">Fulfillment Type</p>
+                    <div className="mt-2"><FulfillmentChip value={selectedDelivery?.fulfillmentType} /></div>
                   </div>
                 </div>
                 <div className="themed-modal-card rounded-xl px-4 py-3">
@@ -1604,6 +1919,379 @@ function AdminCustomersPage({ setMessage }) {
           )}
         </CardBody>
       </Card>
+    </motion.div>
+  );
+}
+
+export { AdminInventoryPage };
+
+const EMPTY_STAFF_FORM = {
+  fullName: "",
+  email: "",
+  contact: "",
+  password: "",
+  confirmPassword: ""
+};
+
+function validateStaffForm(form, { requirePassword = true, emailExists = false } = {}) {
+  const errors = {};
+  if (!String(form.fullName || "").trim()) errors.fullName = "Staff name is required.";
+  const email = validateGmailAddress(form.email);
+  if (!email.ok) errors.email = email.message;
+  else if (emailExists) errors.email = "Email is already registered.";
+  const contact = validateContact(form.contact);
+  if (!contact.ok) errors.contact = contact.message;
+  if (requirePassword) {
+    const password = validatePassword(form.password);
+    if (!password.ok) errors.password = password.message;
+    if (form.password !== form.confirmPassword) errors.confirmPassword = "Passwords do not match.";
+  }
+  return errors;
+}
+
+function StaffAccountInput({
+  label,
+  value,
+  onValueChange,
+  isInvalid,
+  errorMessage,
+  isDisabled = false,
+  type = "text",
+  className = "",
+  ...props
+}) {
+  const invalid = Boolean(isInvalid);
+  return (
+    <label className={`grid gap-2 text-sm font-semibold text-[var(--text-secondary)] ${className}`}>
+      <span>{label}</span>
+      <input
+        {...props}
+        type={type}
+        value={value ?? ""}
+        disabled={isDisabled}
+        aria-invalid={invalid || undefined}
+        onChange={(event) => onValueChange?.(event.target.value)}
+        className={`min-h-11 w-full rounded-xl border bg-[var(--bg-input)] px-3 text-[var(--text-primary)] outline-none transition disabled:cursor-not-allowed disabled:opacity-60 placeholder:text-[var(--text-muted)] ${
+          invalid
+            ? "border-red-500 shadow-[0_0_0_1px_rgba(248,113,113,.75)] focus:border-red-500 focus:shadow-[0_0_0_2px_rgba(248,113,113,.55)]"
+            : "border-[var(--border)]"
+        }`}
+      />
+      {invalid && errorMessage ? (
+        <span className="text-xs font-semibold text-red-400">{errorMessage}</span>
+      ) : null}
+    </label>
+  );
+}
+
+function AdminStaffAccountsPage({ setMessage }) {
+  // function StaffAccountInput is the themed field wrapper used throughout this page.
+  // It keeps the staff form aligned with text-[var(--text-secondary)] and bg-[var(--bg-input)] theme tokens.
+  const [staff, setStaff] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState(EMPTY_STAFF_FORM);
+  const [errors, setErrors] = useState({});
+  const [touched, setTouched] = useState({});
+  const [submitted, setSubmitted] = useState(false);
+  const [emailStatus, setEmailStatus] = useState("idle");
+  const [editing, setEditing] = useState(null);
+  const [resetTarget, setResetTarget] = useState(null);
+  const [resetForm, setResetForm] = useState({ password: "", confirmPassword: "" });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await apiAdminStaffAccounts();
+      setStaff(result.staff || []);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const email = String(form.email || "").trim().toLowerCase();
+    const valid = validateGmailAddress(email).ok;
+    if (!email || !valid || editing) {
+      setEmailStatus("idle");
+      return;
+    }
+    setEmailStatus("checking");
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await apiCheckRegistrationEmail(email);
+        setEmailStatus(result.exists ? "exists" : "available");
+      } catch {
+        setEmailStatus("idle");
+      }
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [form.email, editing]);
+
+  useEffect(() => {
+    const next = validateStaffForm(form, {
+      requirePassword: !editing,
+      emailExists: emailStatus === "exists"
+    });
+    setErrors(next);
+  }, [form, emailStatus, editing]);
+
+  const updateForm = (key, value) => {
+    setForm((current) => ({ ...current, [key]: value }));
+  };
+  const touchField = (key) => {
+    setTouched((current) => ({ ...current, [key]: true }));
+  };
+  const visibleErrors = Object.fromEntries(
+    Object.entries(errors).filter(([key]) => submitted || touched[key])
+  );
+
+  const startEdit = (account) => {
+    setEditing(account);
+    setForm({
+      fullName: account.fullName || "",
+      email: account.email || "",
+      contact: account.contact || "",
+      password: "",
+      confirmPassword: ""
+    });
+    setEmailStatus("idle");
+    setTouched({});
+    setSubmitted(false);
+  };
+
+  const resetEditor = () => {
+    setEditing(null);
+    setForm(EMPTY_STAFF_FORM);
+    setErrors({});
+    setTouched({});
+    setSubmitted(false);
+    setEmailStatus("idle");
+  };
+
+  const saveStaff = async (event) => {
+    event.preventDefault();
+    setSubmitted(true);
+    const nextErrors = validateStaffForm(form, {
+      requirePassword: !editing,
+      emailExists: emailStatus === "exists"
+    });
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) return;
+    setSaving(true);
+    try {
+      if (editing) {
+        await apiAdminUpdateStaffAccount(editing.userId, {
+          fullName: form.fullName,
+          contact: form.contact
+        });
+        setMessage("Staff account updated.");
+      } else {
+        await apiAdminCreateStaffAccount(form);
+        setMessage("Staff account created.");
+      }
+      resetEditor();
+      await load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const disableStaff = async (account) => {
+    if (!window.confirm(`Disable staff account ${account.email}?`)) return;
+    try {
+      await apiAdminDisableStaffAccount(account.userId);
+      setMessage("Staff account disabled.");
+      await load();
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+
+  const resetPassword = async () => {
+    if (!resetTarget) return;
+    if (resetForm.password !== resetForm.confirmPassword) {
+      setMessage("Error: Passwords do not match.");
+      return;
+    }
+    const password = validatePassword(resetForm.password);
+    if (!password.ok) {
+      setMessage(`Error: ${password.message}`);
+      return;
+    }
+    try {
+      await apiAdminResetStaffPassword(resetTarget.userId, resetForm);
+      setMessage("Staff password reset.");
+      setResetTarget(null);
+      setResetForm({ password: "", confirmPassword: "" });
+    } catch (err) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+
+  return (
+    <motion.div className="grid gap-5 xl:grid-cols-[.85fr_1.15fr]" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <Card>
+        <CardHeader>
+          <div>
+            <h2 className="text-lg font-black">Staff Accounts</h2>
+            <p className="text-sm text-slate-400">Create and manage staff access.</p>
+          </div>
+        </CardHeader>
+        <CardBody>
+          <form className="grid gap-3" onSubmit={saveStaff}>
+            <StaffAccountInput
+              label="Name"
+              value={form.fullName}
+              isInvalid={Boolean(visibleErrors.fullName)}
+              errorMessage={visibleErrors.fullName}
+              onBlur={() => touchField("fullName")}
+              onValueChange={(value) => updateForm("fullName", value)}
+            />
+            <StaffAccountInput
+              label="Email"
+              type="email"
+              value={form.email}
+              isDisabled={Boolean(editing)}
+              isInvalid={Boolean(visibleErrors.email)}
+              errorMessage={visibleErrors.email || (emailStatus === "checking" ? "Checking email..." : "")}
+              onBlur={() => touchField("email")}
+              onValueChange={(value) => updateForm("email", value)}
+            />
+            {emailStatus === "available" && !editing ? (
+              <p className="text-xs font-semibold text-emerald-300">Email is available.</p>
+            ) : null}
+            <StaffAccountInput
+              label="Contact"
+              value={form.contact}
+              inputMode="numeric"
+              maxLength={11}
+              isInvalid={Boolean(visibleErrors.contact)}
+              errorMessage={visibleErrors.contact}
+              onBlur={() => touchField("contact")}
+              onValueChange={(value) => updateForm("contact", normalizeContactInput(value))}
+            />
+            {!editing ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <StaffAccountInput
+                  label="Password"
+                  type="password"
+                  value={form.password}
+                  isInvalid={Boolean(visibleErrors.password)}
+                  errorMessage={visibleErrors.password}
+                  onBlur={() => touchField("password")}
+                  onValueChange={(value) => updateForm("password", value)}
+                />
+                <StaffAccountInput
+                  label="Confirm Password"
+                  type="password"
+                  value={form.confirmPassword}
+                  isInvalid={Boolean(visibleErrors.confirmPassword)}
+                  errorMessage={visibleErrors.confirmPassword}
+                  onBlur={() => touchField("confirmPassword")}
+                  onValueChange={(value) => updateForm("confirmPassword", value)}
+                />
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button color="success" type="submit" isLoading={saving} isDisabled={saving || emailStatus === "checking"}>
+                <Plus size={16} />
+                {editing ? "Save Staff" : "Create Staff"}
+              </Button>
+              {editing ? (
+                <Button variant="flat" onPress={resetEditor}>Cancel Edit</Button>
+              ) : null}
+            </div>
+          </form>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader className="justify-between">
+          <h2 className="text-lg font-black">Staff List</h2>
+          <Button size="sm" variant="flat" isIconOnly onPress={load}>
+            <RefreshCw size={14} />
+          </Button>
+        </CardHeader>
+        <CardBody>
+          {loading ? (
+            <div className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+          ) : staff.length === 0 ? (
+            <p className="text-sm text-slate-400">No staff accounts found.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <THead><Th>NAME</Th><Th>EMAIL</Th><Th>CONTACT</Th><Th>STATUS</Th><Th>ACTION</Th></THead>
+                <TBody>
+                  {staff.map((account) => (
+                    <Tr key={account.userId || account.email}>
+                      <Td><span className="font-semibold">{account.fullName || "Staff"}</span></Td>
+                      <Td className="text-sm text-slate-400">{account.email}</Td>
+                      <Td>{account.contact || "-"}</Td>
+                      <Td>
+                        <Chip color={account.isActive ? "success" : "danger"} variant="flat" size="sm">
+                          {account.isActive ? "Active" : "Disabled"}
+                        </Chip>
+                      </Td>
+                      <Td>
+                        <div className="flex flex-wrap gap-2">
+                          <Button size="sm" variant="flat" onPress={() => startEdit(account)}>
+                            <Eye size={14} />
+                            Edit
+                          </Button>
+                          <Button size="sm" variant="flat" onPress={() => setResetTarget(account)}>
+                            Reset Password
+                          </Button>
+                          <Button size="sm" color="danger" variant="light" isDisabled={!account.isActive} onPress={() => disableStaff(account)}>
+                            Disable Staff
+                          </Button>
+                        </div>
+                      </Td>
+                    </Tr>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+      <Modal isOpen={!!resetTarget} onOpenChange={() => setResetTarget(null)}>
+        <Modal.Backdrop>
+          <Modal.Container size="sm">
+            <Modal.Dialog>
+              <Modal.Header>
+                <h2 className="text-lg font-black text-white">Reset Password</h2>
+              </Modal.Header>
+              <Modal.Body className="grid gap-3">
+                <p className="text-sm text-slate-400">{resetTarget?.email}</p>
+                <StaffAccountInput
+                  label="Password"
+                  type="password"
+                  value={resetForm.password}
+                  onValueChange={(value) => setResetForm((current) => ({ ...current, password: value }))}
+                />
+                <StaffAccountInput
+                  label="Confirm Password"
+                  type="password"
+                  value={resetForm.confirmPassword}
+                  onValueChange={(value) => setResetForm((current) => ({ ...current, confirmPassword: value }))}
+                />
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => setResetTarget(null)}>Cancel</Button>
+                <Button color="success" onPress={resetPassword}>Reset Password</Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </motion.div>
   );
 }
@@ -1715,6 +2403,12 @@ function AdminRewardsPage({ setMessage }) {
 function AdminReportsPage({ setMessage }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selectedReport, setSelectedReport] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [range, setRange] = useState("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -1727,6 +2421,15 @@ function AdminReportsPage({ setMessage }) {
     }
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!selectedReport) return;
+    setDetailLoading(true);
+    apiAdminReportDetail(selectedReport.key, {
+      range,
+      from: range === "custom" ? customFrom : "",
+      to: range === "custom" ? customTo : "",
+    }).then(setDetail).catch((err) => setMessage(err.message)).finally(() => setDetailLoading(false));
+  }, [selectedReport, range, customFrom, customTo]);
   const reportFields = { reportType: "Report Type", coverage: "Coverage", status: "Status" };
   const exportExcel = () => {
     const csv = buildCsvContent(Object.values(reportFields), reports, reportFields);
@@ -1801,6 +2504,7 @@ function AdminReportsPage({ setMessage }) {
     };
     document.body.appendChild(iframe);
   };
+  const detailRows = detail?.rows || [];
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="flex flex-wrap gap-3">
@@ -1821,7 +2525,7 @@ function AdminReportsPage({ setMessage }) {
                 <THead><Th>REPORT TYPE</Th><Th>COVERAGE</Th><Th>STATUS</Th></THead>
                 <TBody>
                   {reports.map((r, idx) => (
-                    <Tr key={idx}>
+                    <Tr key={idx} className="cursor-pointer" onClick={() => setSelectedReport(r)}>
                       <Td><span className="font-semibold">{r.reportType}</span></Td>
                       <Td className="text-sm text-slate-400">{r.coverage || "-"}</Td>
                       <Td><Chip color={r.status === "ready" ? "success" : r.status === "pending" ? "warning" : "default"} variant="flat" size="sm">{r.status || "Unknown"}</Chip></Td>
@@ -1833,20 +2537,98 @@ function AdminReportsPage({ setMessage }) {
           )}
         </CardBody>
       </Card>
+      <Modal isOpen={!!selectedReport} onOpenChange={() => { setSelectedReport(null); setDetail(null); }}>
+        <Modal.Backdrop>
+          <Modal.Container size="4xl">
+            <Modal.Dialog>
+              <Modal.Header>
+                <div>
+                  <p className="text-xs font-bold uppercase text-emerald-300">Report Detail</p>
+                  <h2 className="text-lg font-black text-white">{selectedReport?.reportType}</h2>
+                </div>
+              </Modal.Header>
+              <Modal.Body className="space-y-4">
+                <div className="flex flex-wrap gap-3">
+                  <select className="rounded-xl border border-white/10 bg-white/[.05] px-3 py-2 text-sm text-white" value={range} onChange={(event) => setRange(event.target.value)}>
+                    <option value="today">Today</option>
+                    <option value="week">Week</option>
+                    <option value="month">Month</option>
+                    <option value="year">Year</option>
+                    <option value="all">All</option>
+                    <option value="custom">Custom Date</option>
+                  </select>
+                  {range === "custom" ? (
+                    <>
+                      <input type="date" className="rounded-xl border border-white/10 bg-white/[.05] px-3 py-2 text-sm text-white" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} />
+                      <input type="date" className="rounded-xl border border-white/10 bg-white/[.05] px-3 py-2 text-sm text-white" value={customTo} onChange={(event) => setCustomTo(event.target.value)} />
+                    </>
+                  ) : null}
+                </div>
+                {detailLoading ? (
+                  <div className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-16 w-full" />)}</div>
+                ) : detail ? (
+                  <>
+                    {detail.totals ? (
+                      <div className="grid gap-3 md:grid-cols-4">
+                        {Object.entries(detail.totals).map(([key, value]) => (
+                          <div key={key} className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                            <p className="text-xs font-bold uppercase text-slate-500">{key.replace(/([A-Z])/g, " $1")}</p>
+                            <p className="mt-1 font-semibold text-white">{typeof value === "number" && (key.toLowerCase().includes("sales") || key.toLowerCase().includes("revenue")) ? money(value) : String(value)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {detail.paymentBreakdown ? (
+                      <Card><CardBody className="gap-3"><h3 className="text-sm font-bold">Payment Breakdown</h3>{detail.paymentBreakdown.map((row, idx) => <div key={idx} className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2"><span>{row.paymentMethod || row.label}</span><span className="font-semibold text-white">{row.revenue !== undefined ? `${row.orders} / ${money(row.revenue)}` : row.orders}</span></div>)}</CardBody></Card>
+                    ) : null}
+                    {detail.fulfillmentBreakdown ? (
+                      <Card><CardBody className="gap-3"><h3 className="text-sm font-bold">Fulfillment Breakdown</h3>{detail.fulfillmentBreakdown.map((row, idx) => <div key={idx} className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2"><span>{row.fulfillmentType}</span><span className="font-semibold text-white">{row.revenue !== undefined ? `${row.orders} / ${money(row.revenue)}` : row.orders}</span></div>)}</CardBody></Card>
+                    ) : null}
+                    {detail.statusBreakdown ? (
+                      <Card><CardBody className="gap-3"><h3 className="text-sm font-bold">Status Breakdown</h3>{Object.entries(detail.statusBreakdown).map(([label, value]) => <div key={label} className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2"><span>{label}</span><span className="font-semibold text-white">{value}</span></div>)}</CardBody></Card>
+                    ) : null}
+                    {detail.averageDeliveryTime ? <p className="text-sm text-slate-400">Average Delivery Time: <span className="font-semibold text-white">{detail.averageDeliveryTime}</span> | Completion Rate: <span className="font-semibold text-white">{detail.completionRate}%</span></p> : null}
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <THead>
+                          {selectedReport?.key === "inventory" ? <><Th>PRODUCT</Th><Th>ADDED</Th><Th>DEDUCTED</Th><Th>BEFORE</Th><Th>AFTER</Th><Th>DATE</Th><Th>UPDATED BY</Th><Th>REMARKS</Th></> : selectedReport?.key === "top-selling" ? <><Th>RANK</Th><Th>PRODUCT</Th><Th>QTY SOLD</Th><Th>REVENUE</Th><Th>CURRENT STOCK</Th><Th>TREND</Th></> : <><Th>REFERENCE</Th><Th>DETAIL</Th><Th>STATUS</Th></>}
+                        </THead>
+                        <TBody>
+                          {detailRows.map((row, idx) => (
+                            <Tr key={idx}>
+                              {selectedReport?.key === "inventory" ? <><Td>{row.product_name || row.productName || "-"}</Td><Td>{row.stock_added || 0}</Td><Td>{row.stock_deducted || 0}</Td><Td>{row.before_stock || 0}</Td><Td>{row.after_stock || 0}</Td><Td>{row.created_at || "-"}</Td><Td>{row.updated_by_name || row.updated_by || "-"}</Td><Td>{row.remarks || "-"}</Td></> : selectedReport?.key === "top-selling" ? <><Td>{row.ranking}</Td><Td>{row.product}</Td><Td>{row.quantitySold}</Td><Td>{money(row.revenue)}</Td><Td>{row.currentStock}</Td><Td>{row.trend}</Td></> : <><Td>{row.id || row.orderNumber || row.orderId || row.reportType || `Row ${idx + 1}`}</Td><Td className="text-sm text-slate-400">{row.customerName || row.coverage || row.customer || row.paymentMethod || row.fulfillmentType || "-"}</Td><Td>{row.status ? statusLabel(row.status) : row.reportType || "-"}</Td></>}
+                            </Tr>
+                          ))}
+                        </TBody>
+                      </Table>
+                    </div>
+                  </>
+                ) : null}
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => { setSelectedReport(null); setDetail(null); }}>Close</Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </motion.div>
   );
 }
 
-function KpiCard({ label, value, icon, onPress }) {
+function KpiCard({ label, value, icon, onPress, footer = null }) {
   const content = (
-    <CardBody className="flex-row items-center gap-4">
-      <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-400/15 text-emerald-300">
-        {icon}
+    <CardBody className="gap-3">
+      <div className="flex items-center gap-4">
+        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-400/15 text-emerald-300">
+          {icon}
+        </div>
+        <div className="min-w-0 text-left">
+          <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
+          <p className="mt-1 truncate text-xl font-black">{value}</p>
+        </div>
       </div>
-      <div className="min-w-0 text-left">
-        <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
-        <p className="mt-1 truncate text-xl font-black">{value}</p>
-      </div>
+      {footer ? <div onClick={(event) => event.stopPropagation()}>{footer}</div> : null}
     </CardBody>
   );
   return (

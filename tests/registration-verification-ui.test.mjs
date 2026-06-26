@@ -16,10 +16,28 @@ test("registration uses a timed verification-code modal with resend", () => {
   assert.match(source, /Confirm Code/);
 });
 
+test("registration checks existing email before enabling verification and registration", () => {
+  assert.match(apiSource, /apiCheckRegistrationEmail/);
+  assert.match(apiSource, /\/api\/auth\/check-email/);
+  assert.match(serverSource, /\/api\/auth\/check-email/);
+  assert.match(source, /apiCheckRegistrationEmail/);
+  assert.match(source, /window\.setTimeout\([\s\S]*,\s*650\)/);
+  assert.match(source, /registrationState\.canSendVerificationCode/);
+  assert.match(source, /registrationState\.canRegister/);
+  assert.match(source, /Email is already registered\./);
+});
+
+test("login page orders browse products before login and create account", () => {
+  const loginStart = source.indexOf("function LoginPage");
+  const loginEnd = source.indexOf("function RegisterPage");
+  const loginSource = source.slice(loginStart, loginEnd);
+  assert.match(loginSource, /Browse products first[\s\S]*Login[\s\S]*Create an account/);
+});
+
 test("registration routes account and verification errors to inline fields", () => {
   assert.match(source, /setFieldErrors\(\{ email:/);
   assert.match(source, /setFieldErrors\(\{ verificationCode:/);
-  assert.match(source, /isInvalid=\{Boolean\(fieldErrors\.email\)\}/);
+  assert.match(source, /isInvalid=\{Boolean\(displayedFieldErrors\.email\)\}/);
   assert.match(source, /isInvalid=\{Boolean\(fieldErrors\.verificationCode\)\}/);
 });
 

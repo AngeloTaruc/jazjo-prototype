@@ -85,6 +85,7 @@ const PSGC_API_BASE = "https://psgc.gitlab.io/api";
 const METRO_MANILA_CODE = "130000000";
 const METRO_MANILA_LOCATION = { code: METRO_MANILA_CODE, name: "Metro Manila", regionCode: METRO_MANILA_CODE };
 const CUSTOMER_PENDING_ORDER_TTL_MS = 24 * 60 * 60 * 1000;
+const LOW_STOCK_THRESHOLD = 10;
 const locationCache = new Map();
 const registrationVerificationCodes = new Map();
 
@@ -258,6 +259,10 @@ function toUiStatus(dbStatus){
   return map[dbStatus] || dbStatus || "Order Placed";
 }
 
+function statusLabel(status){
+  return toUiStatus(status);
+}
+
 function httpError(message, status = 400){
   const err = new Error(message);
   err.status = status;
@@ -295,6 +300,110 @@ function calculateDeliveryFee(subtotal, settings = DEFAULT_DELIVERY_SETTINGS){
   return safeSubtotal >= normalized.freeDeliveryMinimum ? 0 : normalized.deliveryFee;
 }
 
+function normalizeFulfillmentType(value){
+  return String(value || "delivery").trim().toLowerCase() === "pickup" ? "pickup" : "delivery";
+}
+
+function normalizePaymentMethod(value){
+  const normalized = String(value || "bank_qr_ph").trim().toLowerCase();
+  if(
+    normalized === "cod"
+    || normalized === "cash_on_delivery"
+    || normalized.includes("cash on delivery")
+  ) return "cod";
+  if(normalized === "gcash" || normalized.includes("gcash")) return "gcash";
+  if(normalized === "maya" || normalized === "paymaya" || normalized.includes("maya")) return "maya";
+  if(
+    normalized === "bank qr"
+    || normalized === "bank_qr"
+    || normalized === "bank_qr_ph"
+    || normalized === "qrph"
+    || normalized.includes("bank qr")
+    || normalized.includes("qrph")
+  ) return "bank_qr_ph";
+  return normalized || "bank_qr_ph";
+}
+
+function paymentMethodLabel(value){
+  const normalized = normalizePaymentMethod(value);
+  if(normalized === "cod") return "COD";
+  if(normalized === "gcash") return "GCash";
+  if(normalized === "maya") return "Maya";
+  return "Bank QR PH";
+}
+
+function isOnlinePaymentMethod(value){
+  return normalizePaymentMethod(value) !== "cod";
+}
+
+function startOfDay(date){
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function endOfDay(date){
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+
+function getRangeBounds(range, from, to, now = new Date()){
+  const current = new Date(now);
+  const normalized = String(range || "all").trim().toLowerCase();
+  if(normalized === "all" || normalized === "all_time" || normalized === ""){
+    return { start: null, end: null, key: "all" };
+  }
+  if(normalized === "custom"){
+    const start = from ? startOfDay(from) : null;
+    const end = to ? endOfDay(to) : null;
+    return { start, end, key: "custom" };
+  }
+  if(normalized === "today"){
+    return { start: startOfDay(current), end: endOfDay(current), key: "today" };
+  }
+  if(normalized === "week"){
+    const start = startOfDay(current);
+    const weekday = start.getDay();
+    start.setDate(start.getDate() - weekday);
+    return { start, end: endOfDay(current), key: "week" };
+  }
+  if(normalized === "month"){
+    const start = startOfDay(new Date(current.getFullYear(), current.getMonth(), 1));
+    return { start, end: endOfDay(current), key: "month" };
+  }
+  if(normalized === "year"){
+    const start = startOfDay(new Date(current.getFullYear(), 0, 1));
+    return { start, end: endOfDay(current), key: "year" };
+  }
+  return { start: null, end: null, key: normalized || "all" };
+}
+
+function isWithinRange(value, bounds){
+  if(!bounds?.start && !bounds?.end) return true;
+  const time = Date.parse(value || "");
+  if(!Number.isFinite(time)) return false;
+  if(bounds.start && time < bounds.start.getTime()) return false;
+  if(bounds.end && time > bounds.end.getTime()) return false;
+  return true;
+}
+
+function filterOrdersByRange(orders, range, from, to){
+  const bounds = getRangeBounds(range, from, to);
+  return (orders || []).filter((order) => isWithinRange(order.createdAtRaw || order.createdAt, bounds));
+}
+
+function sumOrderItemQty(order){
+  return (order?.items || []).reduce((sum, item) => sum + Number(item.qty || 0), 0);
+}
+
+function formatDurationHours(hours){
+  const safe = Number(hours || 0);
+  if(!Number.isFinite(safe) || safe <= 0) return "-";
+  if(safe < 1) return `${Math.round(safe * 60)} min`;
+  return `${safe.toFixed(safe >= 10 ? 0 : 1)} hr`;
+}
+
 async function getStoreSettings(){
   try{
     const rows = await supabaseRequest(
@@ -325,6 +434,9 @@ function validateGmailEmail(email){
   const normalized = String(email || "").trim().toLowerCase();
   if(!normalized){
     throw httpError("email is required.");
+  }
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)){
+    throw httpError("Invalid email format.");
   }
   if(!normalized.endsWith("@gmail.com")){
     throw httpError("Email must end with @gmail.com.");
@@ -553,6 +665,9 @@ function validatePasswordComplexity(password){
   if(!value.trim()){
     throw httpError("Password is required.");
   }
+  if(value.length < 8){
+    throw httpError("Password must be at least 8 characters.");
+  }
   return value;
 }
 
@@ -581,27 +696,62 @@ function validateCustomerRegistration(payload){
   return { firstName, lastName, fullName, email, contact, password };
 }
 
+function validateStaffAccountPayload(payload, { requirePassword = true } = {}){
+  const fullName = String(payload.fullName || payload.full_name || payload.name || "").trim().replace(/\s+/g, " ");
+  const email = validateGmailEmail(payload.email);
+  const contact = validatePhilippineContact(payload.contact);
+  const password = String(payload.password || "");
+  const confirmPassword = String(payload.confirmPassword || payload.confirm_password || "");
+
+  if(!fullName){
+    throw httpError("Staff name is required.");
+  }
+  if(requirePassword){
+    validatePasswordComplexity(password);
+    if(password !== confirmPassword){
+      throw httpError("Passwords do not match.");
+    }
+    return { fullName, email, contact, password };
+  }
+  return { fullName, email, contact };
+}
+
+function assertProfileIsActive(profile){
+  if(profile && profile.is_active === false){
+    throw httpError("This account has been disabled.", 403);
+  }
+  return true;
+}
+
 function toUiOrder(order, items = [], events = []){
   return {
+    dbId: order.id,
     id: order.order_code,
     createdAt: order.created_at,
     customerName: order.customer_name,
     contact: order.contact,
     address: order.address,
-    paymentMethod: order.payment_method || "QRPH",
+    fulfillmentType: order.fulfillment_type || "delivery",
+    paymentMethod: paymentMethodLabel(order.payment_method),
+    paymentMethodKey: normalizePaymentMethod(order.payment_method),
     paymentStatus: order.payment_status || "",
     subtotal: Number(order.subtotal || 0),
     deliveryFee: Number(order.delivery_fee || 0),
+    discountAmount: Number(order.discount_amount || 0),
     total: Number(order.total || 0),
     status: toUiStatus(order.status),
     items: items.map(it => ({
       productId: it.sku,
+      dbProductId: it.product_id,
       name: it.name,
       price: Number(it.unit_price || 0),
       qty: Number(it.qty || 0),
       img: it.image_url || ""
     })),
-    status_events: events
+    status_events: events,
+    preparedAt: order.prepared_at || "",
+    preparedBy: order.prepared_by || "",
+    preparationCompleted: order.preparation_completed === true
   };
 }
 
@@ -664,14 +814,102 @@ function formatDate(value){
   });
 }
 
+function buildInvoiceNumber(orderCode){
+  const normalized = String(orderCode || "").trim().replace(/[^A-Z0-9-]+/gi, "").toUpperCase();
+  return normalized ? `INV-${normalized}` : "INV-DRAFT";
+}
+
+async function listInventoryHistory({ from = "", to = "" } = {}){
+  try{
+    const params = ["select=id,product_id,product_name,product_sku,order_id,before_stock,after_stock,stock_added,stock_deducted,action,remarks,updated_by,updated_by_name,created_at"];
+    if(from) params.push(`created_at=gte.${encodeURIComponent(startOfDay(from).toISOString())}`);
+    if(to) params.push(`created_at=lte.${encodeURIComponent(endOfDay(to).toISOString())}`);
+    params.push("order=created_at.desc");
+    return await supabaseRequest(`/rest/v1/inventory_history?${params.join("&")}`, { serviceRole: true });
+  }catch(err){
+    if(isMissingRelationError(err, "inventory_history")) return [];
+    throw err;
+  }
+}
+
+async function createInventoryHistoryEntry(entry){
+  try{
+    await supabaseRequest("/rest/v1/inventory_history", {
+      method: "POST",
+      serviceRole: true,
+      headers: { Prefer: "return=minimal" },
+      body: [{
+        product_id: entry.productId || null,
+        product_name: entry.productName || "",
+        product_sku: entry.productSku || "",
+        order_id: entry.orderId || null,
+        before_stock: Number(entry.beforeStock || 0),
+        after_stock: Number(entry.afterStock || 0),
+        stock_added: Number(entry.stockAdded || 0),
+        stock_deducted: Number(entry.stockDeducted || 0),
+        action: String(entry.action || "update"),
+        remarks: String(entry.remarks || "").trim() || null,
+        updated_by: entry.updatedBy || null,
+        updated_by_name: entry.updatedByName || null
+      }]
+    });
+  }catch(err){
+    if(isMissingRelationError(err, "inventory_history")) return;
+    throw err;
+  }
+}
+
+async function listPreparationRows(orderIds){
+  if(!orderIds.length) return [];
+  try{
+    const inFilter = encodeURIComponent(`(${escapeCsvValues(orderIds)})`);
+    return await supabaseRequest(`/rest/v1/order_preparation_items?select=order_id,product_sku,product_name,required_qty,is_prepared,prepared_by,prepared_at,validation_message&order_id=in.${inFilter}&order=created_at.asc`, {
+      serviceRole: true
+    });
+  }catch(err){
+    if(isMissingRelationError(err, "order_preparation_items")) return [];
+    throw err;
+  }
+}
+
+function buildPreparationItems(order, rows = []){
+  const rowBySku = new Map((rows || []).map((row) => [String(row.product_sku || ""), row]));
+  return (order?.items || []).map((item) => {
+    const saved = rowBySku.get(String(item.productId || "")) || rowBySku.get(String(item.sku || "")) || null;
+    return {
+      productId: item.productId || item.sku || "",
+      name: item.name,
+      qty: Number(item.qty || 0),
+      prepared: saved?.is_prepared === true,
+      preparedAt: saved?.prepared_at || "",
+      preparedBy: saved?.prepared_by || "",
+      validationMessage: saved?.validation_message || ""
+    };
+  });
+}
+
+function buildPreparationSummary(order, rows = []){
+  const items = buildPreparationItems(order, rows);
+  const total = items.length;
+  const prepared = items.filter((item) => item.prepared).length;
+  const percent = total > 0 ? Math.round((prepared / total) * 100) : 0;
+  return {
+    items,
+    preparedItems: prepared,
+    totalItems: total,
+    percent,
+    completed: total > 0 && prepared === total
+  };
+}
+
 async function getProfileByEmail(email){
-  const q = `/rest/v1/profiles?select=user_id,email,role&email=eq.${encodeURIComponent(email)}&limit=1`;
+  const q = `/rest/v1/profiles?select=user_id,email,role,is_active&email=eq.${encodeURIComponent(email)}&limit=1`;
   const rows = await supabaseRequest(q, { serviceRole: true });
   return rows?.[0] || null;
 }
 
 async function getProfileFullByEmail(email){
-  const q = `/rest/v1/profiles?select=user_id,email,role,full_name,contact,address,created_at,updated_at&email=eq.${encodeURIComponent(email)}&limit=1`;
+  const q = `/rest/v1/profiles?select=user_id,email,role,full_name,contact,address,is_active,created_at,updated_at&email=eq.${encodeURIComponent(email)}&limit=1`;
   const rows = await supabaseRequest(q, { serviceRole: true });
   return rows?.[0] || null;
 }
@@ -892,7 +1130,7 @@ function toInventoryProductRow(row){
   };
 }
 
-async function createInventoryProduct(payload){
+async function createInventoryProduct(payload, actorProfile = null){
   const providedSku = String(payload.sku || "").trim();
   const name = String(payload.name || "").trim();
   const category = normalizeCategoryName(payload.category || "");
@@ -942,10 +1180,25 @@ async function createInventoryProduct(payload){
       is_active: isActive
     }]
   });
+  if(inserted?.[0]){
+    await createInventoryHistoryEntry({
+      productId: inserted[0].id,
+      productName: inserted[0].name || name,
+      productSku: inserted[0].sku || sku,
+      beforeStock: 0,
+      afterStock: stockCases,
+      stockAdded: stockCases,
+      stockDeducted: 0,
+      action: "create_product",
+      remarks: `Product ${name} created.`,
+      updatedBy: actorProfile?.user_id || null,
+      updatedByName: actorProfile?.full_name || actorProfile?.email || null
+    });
+  }
   return toInventoryProductRow(inserted?.[0] || {});
 }
 
-async function updateInventoryProductByName(name, payload){
+async function updateInventoryProductByName(name, payload, actorProfile = null){
   const existing = await getProductByNameRaw(name);
   if(!existing){
     const err = new Error("Product not found.");
@@ -995,10 +1248,25 @@ async function updateInventoryProductByName(name, payload){
     headers: { Prefer: "return=representation" },
     body: patch
   });
+  if("stock_cases" in patch){
+    await createInventoryHistoryEntry({
+      productId: existing.id,
+      productName: patch.name || existing.name,
+      productSku: existing.sku,
+      beforeStock: Number(existing.stock_cases || 0),
+      afterStock: Number(patch.stock_cases || 0),
+      stockAdded: Math.max(0, Number(patch.stock_cases || 0) - Number(existing.stock_cases || 0)),
+      stockDeducted: Math.max(0, Number(existing.stock_cases || 0) - Number(patch.stock_cases || 0)),
+      action: "update_stock",
+      remarks: `Stock updated while editing ${patch.name || existing.name}.`,
+      updatedBy: actorProfile?.user_id || null,
+      updatedByName: actorProfile?.full_name || actorProfile?.email || null
+    });
+  }
   return toInventoryProductRow(updated?.[0] || existing);
 }
 
-async function restockInventoryProductByName(payload){
+async function restockInventoryProductByName(payload, actorProfile = null){
   const productName = String(payload.productName || payload.product_name || "").trim();
   const addCases = Number(payload.addCases ?? payload.add_cases ?? 0);
   if(!productName) throw new Error("productName is required.");
@@ -1018,6 +1286,19 @@ async function restockInventoryProductByName(payload){
     headers: { Prefer: "return=representation" },
     body: { stock_cases: nextStock, is_active: true }
   });
+  await createInventoryHistoryEntry({
+    productId: product.id,
+    productName: product.name,
+    productSku: product.sku,
+    beforeStock: Number(product.stock_cases || 0),
+    afterStock: nextStock,
+    stockAdded: addCases,
+    stockDeducted: 0,
+    action: "restock",
+    remarks: `Restocked ${product.name} by ${addCases} case(s).`,
+    updatedBy: actorProfile?.user_id || null,
+    updatedByName: actorProfile?.full_name || actorProfile?.email || null
+  });
   return toInventoryProductRow(updated?.[0] || product);
 }
 
@@ -1035,32 +1316,33 @@ async function deleteInventoryProductByName(name){
 }
 
 async function listProfiles(){
-  return await supabaseRequest("/rest/v1/profiles?select=user_id,email,role,full_name,contact,address,created_at", { serviceRole: true });
+  return await supabaseRequest("/rest/v1/profiles?select=user_id,email,role,full_name,contact,address,is_active,created_at,updated_at", { serviceRole: true });
 }
 
 async function listAllOrdersRaw(){
-  return await supabaseRequest("/rest/v1/orders?select=id,order_code,user_id,customer_name,contact,address,subtotal,delivery_fee,total,status,payment_status,payment_method,created_at&order=created_at.desc", { serviceRole: true });
+  return await supabaseRequest("/rest/v1/orders?select=id,order_code,user_id,customer_name,contact,address,fulfillment_type,subtotal,delivery_fee,discount_amount,total,status,payment_status,payment_method,created_at,paid_at,prepared_at,prepared_by,preparation_completed&order=created_at.desc", { serviceRole: true });
 }
 
 async function listAllOrderItems(orderIds){
   if(!orderIds.length) return [];
   const inFilter = encodeURIComponent(`(${escapeCsvValues(orderIds)})`);
-  return await supabaseRequest(`/rest/v1/order_items?select=order_id,sku,name,image_url,unit_price,qty,line_total,created_at&order_id=in.${inFilter}&order=created_at.asc`, { serviceRole: true });
+  return await supabaseRequest(`/rest/v1/order_items?select=order_id,product_id,sku,name,image_url,unit_price,qty,line_total,created_at&order_id=in.${inFilter}&order=created_at.asc`, { serviceRole: true });
 }
 
 async function listAllOrderEvents(orderIds){
   if(!orderIds.length) return [];
   const inFilter = encodeURIComponent(`(${escapeCsvValues(orderIds)})`);
-  return await supabaseRequest(`/rest/v1/order_status_events?select=order_id,status,note,created_at&order_id=in.${inFilter}&order=created_at.asc`, { serviceRole: true });
+  return await supabaseRequest(`/rest/v1/order_status_events?select=order_id,status,note,changed_by,created_at&order_id=in.${inFilter}&order=created_at.asc`, { serviceRole: true });
 }
 
 async function listAllOrdersDetailed(){
   const [orders, profiles] = await Promise.all([listAllOrdersRaw(), listProfiles()]);
   if(!orders.length) return [];
   const orderIds = orders.map(o => o.id);
-  const [items, events] = await Promise.all([
+  const [items, events, preparationRows] = await Promise.all([
     listAllOrderItems(orderIds),
-    listAllOrderEvents(orderIds)
+    listAllOrderEvents(orderIds),
+    listPreparationRows(orderIds)
   ]);
   const profileByUser = new Map(profiles.map(p => [p.user_id, p]));
   return orders.map(order => ({
@@ -1072,6 +1354,11 @@ async function listAllOrdersDetailed(){
     userId: order.user_id,
     createdAtRaw: order.created_at,
     paymentStatus: order.payment_status,
+    paidAt: order.paid_at || "",
+    preparation: buildPreparationSummary(
+      toUiOrder(order, items.filter(i => i.order_id === order.id), events.filter(e => e.order_id === order.id)),
+      preparationRows.filter((row) => row.order_id === order.id)
+    ),
     profile: profileByUser.get(order.user_id) || null
   }));
 }
@@ -1272,40 +1559,85 @@ function computeRewardDiscount({ rewardType, subtotal, deliveryFee }){
   return 0;
 }
 
+function computeTopSellingProducts(orders = []){
+  const byProduct = new Map();
+  for(const order of orders || []){
+    for(const item of order.items || []){
+      const key = String(item.name || item.productId || "").trim();
+      if(!key) continue;
+      const current = byProduct.get(key) || { product: key, quantitySold: 0, revenue: 0 };
+      current.quantitySold += Number(item.qty || 0);
+      current.revenue += Number(item.qty || 0) * Number(item.price || 0);
+      byProduct.set(key, current);
+    }
+  }
+  return [...byProduct.values()].sort((a, b) => Number(b.quantitySold || 0) - Number(a.quantitySold || 0));
+}
+
+function computePaymentBreakdown(orders = []){
+  const breakdown = new Map();
+  for(const order of orders || []){
+    const label = paymentMethodLabel(order.paymentMethod || order.payment_method);
+    const current = breakdown.get(label) || { paymentMethod: label, orders: 0, revenue: 0 };
+    current.orders += 1;
+    current.revenue += Number(order.total || 0);
+    breakdown.set(label, current);
+  }
+  return [...breakdown.values()].sort((a, b) => Number(b.revenue || 0) - Number(a.revenue || 0));
+}
+
+function computeFulfillmentBreakdown(orders = []){
+  const breakdown = new Map();
+  for(const order of orders || []){
+    const label = normalizeFulfillmentType(order.fulfillmentType || order.fulfillment_type) === "pickup" ? "Pickup" : "Delivery";
+    const current = breakdown.get(label) || { fulfillmentType: label, orders: 0, revenue: 0 };
+    current.orders += 1;
+    current.revenue += Number(order.total || 0);
+    breakdown.set(label, current);
+  }
+  return [...breakdown.values()];
+}
+
 async function getPanelDashboard(){
   const [orders, products, profiles] = await Promise.all([listAllOrdersDetailed(), listProducts(), listProfiles()]);
   const recentOrders = orders.slice(0, 8);
   const totalSales = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
   const transactions = orders.length;
-  const todayKey = new Date().toISOString().slice(0, 10);
-  const todayOrders = orders.filter((o) => String(o.createdAtRaw || o.createdAt || "").slice(0, 10) === todayKey);
+  const todayOrders = filterOrdersByRange(orders, "today");
   const salesToday = todayOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
-  const byProduct = new Map();
-  for(const o of orders){
-    for(const it of o.items || []){
-      byProduct.set(it.name, (byProduct.get(it.name) || 0) + Number(it.qty || 0));
-    }
-  }
-  let bestSeller = "-";
-  let bestQty = 0;
-  for(const [name, qty] of byProduct){
-    if(qty > bestQty){ bestQty = qty; bestSeller = name; }
-  }
-  const lowStockCount = products.filter(p => Number(p.stockCases) > 0 && Number(p.stockCases) <= 10).length;
-  const outOfStockCount = products.filter(p => Number(p.stockCases) <= 0).length;
+  const topProducts = computeTopSellingProducts(orders);
+  const bestSeller = topProducts[0]?.product || "-";
   const lowStock = products
-    .filter(p => Number(p.stockCases) <= 10)
-    .map(p => ({
-      ...p,
-      status: Number(p.stockCases) <= 0 ? "Out of Stock" : "Low Stock"
-    }));
+    .filter((p) => Number(p.stockCases) > 0 && Number(p.stockCases) <= LOW_STOCK_THRESHOLD)
+    .map((p) => ({ ...p, status: "Low Stock" }))
+    .sort((a, b) => Number(a.stockCases || 0) - Number(b.stockCases || 0));
+  const outOfStock = products
+    .filter((p) => Number(p.stockCases) <= 0)
+    .map((p) => ({ ...p, status: "Out of Stock" }));
+  const customers = profiles.filter((profile) => String(profile.role || "") === "customer");
   return {
     recentOrders,
     orders,
-    customers: profiles.filter((profile) => String(profile.role || "") === "customer"),
+    customers,
     todayOrders,
     lowStock,
-    kpis: { totalSales, salesToday, transactions, totalOrders: orders.length, totalCustomers: profiles.filter((profile) => String(profile.role || "") === "customer").length, bestSeller, lowStockCount, outOfStockCount }
+    outOfStock,
+    lowStockThreshold: LOW_STOCK_THRESHOLD,
+    analytics: {
+      topProducts,
+      paymentBreakdown: computePaymentBreakdown(orders),
+      fulfillmentBreakdown: computeFulfillmentBreakdown(orders)
+    },
+    kpis: {
+      totalSales,
+      salesToday,
+      transactions,
+      totalOrders: orders.length,
+      totalCustomers: customers.length,
+      bestSeller,
+      lowStockCount: lowStock.length,
+      outOfStockCount: outOfStock.length
+    }
   };
 }
 
@@ -1338,11 +1670,12 @@ async function getPanelInventory(){
   const products = await listProducts();
   const inventory = products.map(p => ({
     ...p,
-    status: Number(p.stockCases) <= 0 ? "Out of Stock" : Number(p.stockCases) <= 10 ? "Low Stock" : "In Stock"
+    status: Number(p.stockCases) <= 0 ? "Out of Stock" : Number(p.stockCases) <= LOW_STOCK_THRESHOLD ? "Low Stock" : "In Stock"
   }));
-  const lowStock = inventory.filter(p => p.status !== "In Stock").sort((a,b)=>a.stockCases-b.stockCases);
+  const lowStock = inventory.filter(p => Number(p.stockCases) > 0 && Number(p.stockCases) <= LOW_STOCK_THRESHOLD).sort((a,b)=>a.stockCases-b.stockCases);
+  const outOfStock = inventory.filter(p => Number(p.stockCases) <= 0);
   const categories = await listAdminCategories();
-  return { inventory, lowStock, categories };
+  return { inventory, lowStock, outOfStock, categories, lowStockThreshold: LOW_STOCK_THRESHOLD };
 }
 
 async function getPanelSales(){
@@ -1424,14 +1757,147 @@ async function getPanelReports(){
   const [orders, products] = await Promise.all([listAllOrdersDetailed(), listProducts()]);
   const delivered = orders.filter(o => o.status === "Delivered").length;
   const pending = orders.filter(o => o.status !== "Delivered" && o.status !== "Cancelled").length;
-  const low = products.filter(p => Number(p.stockCases) > 0 && Number(p.stockCases) <= 10).length;
+  const low = products.filter(p => Number(p.stockCases) > 0 && Number(p.stockCases) <= LOW_STOCK_THRESHOLD).length;
   const out = products.filter(p => Number(p.stockCases) <= 0).length;
   return [
-    { reportType: "Sales Report", coverage: `${orders.length} orders total`, status: "Available" },
-    { reportType: "Inventory Report", coverage: `${products.length} products (${low} low, ${out} out)`, status: "Available" },
-    { reportType: "Top Selling Products", coverage: "Computed from order items", status: "Available" },
-    { reportType: "Delivery Summary", coverage: `${delivered} delivered / ${pending} pending`, status: "Available" }
+    { key: "sales", reportType: "Sales Report", coverage: `${orders.length} orders total`, status: "available" },
+    { key: "inventory", reportType: "Inventory Report", coverage: `${products.length} products (${low} low, ${out} out)`, status: "available" },
+    { key: "top-selling", reportType: "Top Selling Products", coverage: "Computed from order items", status: "available" },
+    { key: "delivery", reportType: "Delivery Summary", coverage: `${delivered} delivered / ${pending} pending`, status: "available" }
   ];
+}
+
+function previousRangeBounds(range, from, to, now = new Date()){
+  const current = getRangeBounds(range, from, to, now);
+  if(!current.start || !current.end) return { start: null, end: null, key: "all" };
+  const duration = current.end.getTime() - current.start.getTime() + 1;
+  return {
+    start: new Date(current.start.getTime() - duration),
+    end: new Date(current.start.getTime() - 1),
+    key: `${current.key}_previous`
+  };
+}
+
+function filterOrdersByBounds(orders, bounds){
+  return (orders || []).filter((order) => isWithinRange(order.createdAtRaw || order.createdAt, bounds));
+}
+
+function buildTrendLabel(current, previous){
+  const delta = Number(current || 0) - Number(previous || 0);
+  if(delta > 0) return "Up";
+  if(delta < 0) return "Down";
+  return "Stable";
+}
+
+async function getPanelReportDetail(type, { range = "all", from = "", to = "" } = {}){
+  const reportType = String(type || "").trim().toLowerCase();
+  const [orders, products, inventoryHistory] = await Promise.all([
+    listAllOrdersDetailed(),
+    listProducts(),
+    listInventoryHistory({ from, to })
+  ]);
+  const filteredOrders = filterOrdersByRange(orders, range, from, to);
+  const previousOrders = filterOrdersByBounds(orders, previousRangeBounds(range, from, to));
+  const activeOrders = filteredOrders.filter((order) => statusLabel(order.status) !== "Cancelled");
+
+  if(reportType === "sales"){
+    return {
+      type: "sales",
+      title: "Sales Report",
+      filter: { range, from, to },
+      totals: {
+        totalSales: activeOrders.reduce((sum, order) => sum + Number(order.total || 0), 0),
+        orders: activeOrders.length,
+        soldProducts: activeOrders.reduce((sum, order) => sum + sumOrderItemQty(order), 0),
+        revenue: activeOrders.reduce((sum, order) => sum + Number(order.total || 0), 0)
+      },
+      paymentBreakdown: computePaymentBreakdown(activeOrders),
+      fulfillmentBreakdown: computeFulfillmentBreakdown(activeOrders),
+      rows: activeOrders.slice(0, 25)
+    };
+  }
+
+  if(reportType === "inventory"){
+    const bounds = getRangeBounds(range, from, to);
+    const filteredHistory = inventoryHistory.filter((row) => isWithinRange(row.created_at, bounds));
+    return {
+      type: "inventory",
+      title: "Inventory Report",
+      filter: { range, from, to },
+      totals: {
+        products: products.length,
+        lowStock: products.filter((p) => Number(p.stockCases) > 0 && Number(p.stockCases) <= LOW_STOCK_THRESHOLD).length,
+        outOfStock: products.filter((p) => Number(p.stockCases) <= 0).length,
+        movements: filteredHistory.length
+      },
+      rows: filteredHistory
+    };
+  }
+
+  if(reportType === "top-selling"){
+    const currentTop = computeTopSellingProducts(activeOrders);
+    const previousTop = computeTopSellingProducts(previousOrders);
+    const previousByProduct = new Map(previousTop.map((row) => [row.product, row]));
+    const stockByName = new Map(products.map((product) => [product.name, product.stockCases]));
+    return {
+      type: "top-selling",
+      title: "Top Selling Products",
+      filter: { range, from, to },
+      rows: currentTop.map((row, index) => ({
+        ranking: index + 1,
+        product: row.product,
+        quantitySold: row.quantitySold,
+        revenue: row.revenue,
+        currentStock: Number(stockByName.get(row.product) || 0),
+        trend: buildTrendLabel(row.quantitySold, previousByProduct.get(row.product)?.quantitySold || 0)
+      }))
+    };
+  }
+
+  if(reportType === "delivery"){
+    const statusKeys = ["Order Placed", "Preparing", "Prepared", "Out for Delivery", "Delivered", "Ready for Pickup", "Picked Up", "Cancelled"];
+    const counts = Object.fromEntries(statusKeys.map((key) => [key, 0]));
+    let completed = 0;
+    const deliveryTimes = [];
+    for(const order of filteredOrders){
+      const label = statusLabel(order.status);
+      if(label in counts) counts[label] += 1;
+      if(label === "Preparing" && order.preparationCompleted) counts.Prepared += 1;
+      const fulfillment = normalizeFulfillmentType(order.fulfillmentType);
+      if(fulfillment === "pickup" && label === "Order Placed" && order.preparationCompleted) counts["Ready for Pickup"] += 1;
+      if(fulfillment === "pickup" && label === "Delivered") counts["Picked Up"] += 1;
+      if(fulfillment === "delivery" && label === "Delivered") counts["Delivered"] += 0;
+      if(label === "Delivered"){
+        completed += 1;
+        const started = Date.parse(order.createdAtRaw || order.createdAt || "");
+        const ended = Date.parse(order.preparedAt || order.createdAtRaw || order.createdAt || "");
+        if(Number.isFinite(started) && Number.isFinite(ended) && ended >= started){
+          deliveryTimes.push((ended - started) / (1000 * 60 * 60));
+        }
+      }
+    }
+    const avgHours = deliveryTimes.length
+      ? deliveryTimes.reduce((sum, value) => sum + value, 0) / deliveryTimes.length
+      : 0;
+    const codOrders = filteredOrders.filter((order) => normalizePaymentMethod(order.paymentMethod) === "cod");
+    const onlineOrders = filteredOrders.filter((order) => normalizePaymentMethod(order.paymentMethod) !== "cod");
+    return {
+      type: "delivery",
+      title: "Delivery Summary",
+      filter: { range, from, to },
+      statusBreakdown: counts,
+      fulfillmentBreakdown: computeFulfillmentBreakdown(filteredOrders),
+      paymentBreakdown: [
+        { label: "COD", orders: codOrders.length },
+        { label: "Online Payments", orders: onlineOrders.length }
+      ],
+      averageDeliveryTime: formatDurationHours(avgHours),
+      completionRate: filteredOrders.length ? Math.round((completed / filteredOrders.length) * 100) : 0,
+      rows: filteredOrders.slice(0, 25)
+    };
+  }
+
+  throw httpError("Report not found.", 404);
 }
 
 async function getPanelRewards(){
@@ -1555,6 +2021,8 @@ async function getPanelDelivery(){
       customerName: order.customerName,
       recipientName: order.customerName,
       contact: order.contact,
+      fulfillmentType: order.fulfillmentType,
+      paymentMethod: paymentMethodLabel(order.paymentMethod || order.payment_method),
       deliveryAddress: order.address,
       status: order.status,
       updatedAt: (order.status_events || []).slice(-1)[0]?.created_at || order.createdAt,
@@ -1663,7 +2131,7 @@ function getBearerToken(req){
 }
 
 async function getProfileByUserId(userId){
-  const q = `/rest/v1/profiles?select=user_id,email,role,full_name,contact,address,created_at,updated_at&user_id=eq.${encodeURIComponent(userId)}&limit=1`;
+  const q = `/rest/v1/profiles?select=user_id,email,role,full_name,contact,address,is_active,created_at,updated_at&user_id=eq.${encodeURIComponent(userId)}&limit=1`;
   const rows = await supabaseRequest(q, { serviceRole: true });
   return rows?.[0] || null;
 }
@@ -1694,6 +2162,127 @@ async function upsertCustomerProfile({ userId, email, fullName, contact, address
     body: [payload]
   });
   return rows?.[0] || null;
+}
+
+function toStaffAccount(row){
+  return {
+    userId: row.user_id,
+    email: row.email || "",
+    fullName: row.full_name || "",
+    contact: row.contact || "",
+    role: row.role || "staff",
+    isActive: row.is_active !== false,
+    createdAt: row.created_at || "",
+    updatedAt: row.updated_at || ""
+  };
+}
+
+async function listStaffAccounts(){
+  const rows = await supabaseRequest(
+    "/rest/v1/profiles?select=user_id,email,role,full_name,contact,is_active,created_at,updated_at&role=eq.staff&order=created_at.desc",
+    { serviceRole: true }
+  );
+  return (rows || []).map(toStaffAccount);
+}
+
+async function createStaffAccount(payload){
+  const input = validateStaffAccountPayload(payload);
+  const existing = await getProfileByEmail(input.email);
+  if(existing){
+    throw httpError("An account with this email already exists.", 409);
+  }
+
+  let created = null;
+  try{
+    created = await supabaseAdminCreateUser({
+      email: input.email,
+      password: input.password,
+      fullName: input.fullName
+    });
+  }catch(err){
+    if(/already|registered|exists|duplicate/i.test(String(err?.message || ""))){
+      throw httpError("An account with this email already exists.", 409);
+    }
+    throw err;
+  }
+
+  const userId = created?.id || created?.user?.id || "";
+  if(!userId){
+    throw new Error("Supabase did not return the new staff user id.");
+  }
+
+  try{
+    const rows = await supabaseRequest("/rest/v1/profiles", {
+      method: "POST",
+      serviceRole: true,
+      headers: { Prefer: "return=representation" },
+      body: [{
+        user_id: userId,
+        email: input.email,
+        role: "staff",
+        full_name: input.fullName,
+        contact: input.contact,
+        is_active: true
+      }]
+    });
+    return toStaffAccount(rows?.[0] || {});
+  }catch(err){
+    await supabaseAdminDeleteUser(userId).catch((_cleanupErr) => {});
+    throw err;
+  }
+}
+
+async function updateStaffAccount(userId, payload){
+  const id = String(userId || "").trim();
+  if(!id) throw httpError("Missing staff user id.", 400);
+  const fullName = String(payload.fullName || payload.full_name || payload.name || "").trim().replace(/\s+/g, " ");
+  const contact = validatePhilippineContact(payload.contact);
+  if(!fullName) throw httpError("Staff name is required.");
+  const rows = await supabaseRequest(`/rest/v1/profiles?user_id=eq.${encodeURIComponent(id)}&role=eq.staff`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=representation" },
+    body: {
+      full_name: fullName,
+      contact,
+      updated_at: new Date().toISOString()
+    }
+  });
+  if(!rows?.[0]) throw httpError("Staff account not found.", 404);
+  return toStaffAccount(rows[0]);
+}
+
+async function disableStaffAccount(userId){
+  const id = String(userId || "").trim();
+  if(!id) throw httpError("Missing staff user id.", 400);
+  const rows = await supabaseRequest(`/rest/v1/profiles?user_id=eq.${encodeURIComponent(id)}&role=eq.staff`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=representation" },
+    body: {
+      is_active: false,
+      updated_at: new Date().toISOString()
+    }
+  });
+  if(!rows?.[0]) throw httpError("Staff account not found.", 404);
+  return toStaffAccount(rows[0]);
+}
+
+async function resetStaffPassword(userId, payload){
+  const id = String(userId || "").trim();
+  if(!id) throw httpError("Missing staff user id.", 400);
+  const password = validatePasswordComplexity(payload.password || payload.newPassword || payload.new_password);
+  const confirmPassword = String(payload.confirmPassword || payload.confirm_password || payload.password || "");
+  if(password !== confirmPassword){
+    throw httpError("Passwords do not match.");
+  }
+  const rows = await supabaseRequest(
+    `/rest/v1/profiles?select=user_id,role&user_id=eq.${encodeURIComponent(id)}&role=eq.staff&limit=1`,
+    { serviceRole: true }
+  );
+  if(!rows?.[0]) throw httpError("Staff account not found.", 404);
+  await supabaseAdminUpdateUserPassword(id, password);
+  return { ok: true };
 }
 
 async function registerCustomerAccount(payload){
@@ -1771,6 +2360,7 @@ async function requireAuth(req, allowedRoles = []){
     err.status = 403;
     throw err;
   }
+  assertProfileIsActive(profile);
   if(allowedRoles.length && !allowedRoles.includes(profile.role)){
     const err = new Error("Forbidden");
     err.status = 403;
@@ -1793,7 +2383,7 @@ function buildPaymongoOrderLineItems({ orderCode, total }){
 }
 
 function isQrphMethod(method){
-  return String(method || "").toUpperCase().includes("QRPH");
+  return normalizePaymentMethod(method) !== "cod";
 }
 
 function paymongoAuthHeader(){
@@ -1923,7 +2513,7 @@ async function listOrdersForUserId(userId){
   if(!userId) return [];
 
   const orders = await supabaseRequest(
-    `/rest/v1/orders?select=id,order_code,user_id,customer_name,contact,address,subtotal,delivery_fee,total,status,payment_status,payment_method,created_at&user_id=eq.${userId}&order=created_at.desc`,
+    `/rest/v1/orders?select=id,order_code,user_id,customer_name,contact,address,fulfillment_type,subtotal,delivery_fee,discount_amount,total,status,payment_status,payment_method,created_at,paid_at,prepared_at,prepared_by,preparation_completed&user_id=eq.${userId}&order=created_at.desc`,
     { serviceRole: true }
   );
   const visibleOrders = orders.filter(order => !isStaleCustomerPendingOrder(order));
@@ -1932,16 +2522,25 @@ async function listOrdersForUserId(userId){
   const orderIds = visibleOrders.map(o => o.id);
   const inFilter = encodeURIComponent(`(${escapeCsvValues(orderIds)})`);
   const [items, events] = await Promise.all([
-    supabaseRequest(`/rest/v1/order_items?select=order_id,sku,name,image_url,unit_price,qty&order_id=in.${inFilter}&order=created_at.asc`, { serviceRole: true }),
-    supabaseRequest(`/rest/v1/order_status_events?select=order_id,status,note,created_at&order_id=in.${inFilter}&order=created_at.asc`, { serviceRole: true })
+    supabaseRequest(`/rest/v1/order_items?select=order_id,product_id,sku,name,image_url,unit_price,qty&order_id=in.${inFilter}&order=created_at.asc`, { serviceRole: true }),
+    supabaseRequest(`/rest/v1/order_status_events?select=order_id,status,note,changed_by,created_at&order_id=in.${inFilter}&order=created_at.asc`, { serviceRole: true })
   ]);
 
+  const preparationRows = await listPreparationRows(orderIds);
+
   return visibleOrders.map(order =>
-    toUiOrder(
+    ({
+      ...toUiOrder(
       order,
       items.filter(i => i.order_id === order.id),
       events.filter(e => e.order_id === order.id)
-    )
+      ),
+      paidAt: order.paid_at || "",
+      preparation: buildPreparationSummary(
+        toUiOrder(order, items.filter(i => i.order_id === order.id), events.filter(e => e.order_id === order.id)),
+        preparationRows.filter((row) => row.order_id === order.id)
+      )
+    })
   );
 }
 
@@ -1953,6 +2552,62 @@ async function getOrderForEmail(orderCode, email){
 async function getOrderForUserId(orderCode, userId){
   const orders = await listOrdersForUserId(userId);
   return orders.find(o => o.id === orderCode) || null;
+}
+
+async function getOrderByCodeDetailed(orderCode){
+  const rows = await supabaseRequest(
+    `/rest/v1/orders?select=id,order_code,user_id,customer_name,contact,address,fulfillment_type,subtotal,delivery_fee,discount_amount,total,status,payment_status,payment_method,created_at,paid_at,prepared_at,prepared_by,preparation_completed&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`,
+    { serviceRole: true }
+  );
+  const order = rows?.[0];
+  if(!order) return null;
+  const [items, events, preparationRows, profile] = await Promise.all([
+    supabaseRequest(`/rest/v1/order_items?select=order_id,product_id,sku,name,image_url,unit_price,qty,line_total,created_at&order_id=eq.${order.id}&order=created_at.asc`, { serviceRole: true }),
+    supabaseRequest(`/rest/v1/order_status_events?select=order_id,status,note,changed_by,created_at&order_id=eq.${order.id}&order=created_at.asc`, { serviceRole: true }),
+    listPreparationRows([order.id]),
+    getProfileByUserId(order.user_id).catch(() => null)
+  ]);
+  const uiOrder = toUiOrder(order, items || [], events || []);
+  return {
+    ...uiOrder,
+    userId: order.user_id,
+    createdAtRaw: order.created_at,
+    paymentStatus: order.payment_status,
+    paidAt: order.paid_at || "",
+    preparation: buildPreparationSummary(uiOrder, preparationRows || []),
+    profile
+  };
+}
+
+async function getOrderInvoice(orderCode){
+  const order = await getOrderByCodeDetailed(orderCode);
+  if(!order) throw httpError("Order not found.", 404);
+  return {
+    company: {
+      name: "Jazjo Beverages",
+      address: "Jazjo Beverages, Philippines",
+      contact: "09170000002"
+    },
+    invoiceNumber: buildInvoiceNumber(order.id),
+    orderNumber: order.id,
+    customer: order.customerName || "Customer",
+    contact: order.contact || "",
+    paymentMethod: paymentMethodLabel(order.paymentMethod),
+    fulfillmentType: normalizeFulfillmentType(order.fulfillmentType) === "pickup" ? "Pickup" : "Delivery",
+    orderStatus: statusLabel(order.status),
+    paymentStatus: String(order.paymentStatus || "").trim() || "pending",
+    createdAt: order.createdAt || "",
+    subtotal: Number(order.subtotal || 0),
+    deliveryFee: Number(order.deliveryFee || 0),
+    discount: Number(order.discountAmount || 0),
+    grandTotal: Number(order.total || 0),
+    items: (order.items || []).map((item) => ({
+      product: item.name,
+      quantity: Number(item.qty || 0),
+      unitPrice: Number(item.price || 0),
+      lineTotal: Number(item.qty || 0) * Number(item.price || 0)
+    }))
+  };
 }
 
 function uiStatusToDbStatus(status){
@@ -1978,14 +2633,18 @@ function uiStatusToDbStatus(status){
 async function createOrder(payload, authProfile){
   const customerName = String(payload.customerName || "").trim();
   const contact = validatePhilippineContact(payload.contact);
-  const deliveryAddress = await validateDeliveryAddress(payload);
+  const fulfillmentType = normalizeFulfillmentType(payload.fulfillmentType || payload.fulfillment_type);
+  const isPickup = fulfillmentType === "pickup";
+  const deliveryAddress = isPickup
+    ? { address: String(payload.address || payload.fullAddress || "Pickup at Jazjo Beverages").trim() || "Pickup at Jazjo Beverages" }
+    : await validateDeliveryAddress(payload);
   const address = deliveryAddress.address;
-  const paymentMethod = String(payload.paymentMethod || "QRPH").trim();
+  const paymentMethod = normalizePaymentMethod(payload.paymentMethod || "bank_qr_ph");
   const rewardRedemptionId = String(payload.rewardRedemptionId || payload.reward_redemption_id || "").trim();
   const returnBaseUrl = normalizeReturnBaseUrl(payload.returnBaseUrl || payload.return_base_url || APP_BASE_URL);
   const items = Array.isArray(payload.items) ? payload.items : [];
 
-  if(!authProfile?.user_id || !customerName || !contact || !address || !items.length){
+  if(!authProfile?.user_id || !customerName || !contact || (!isPickup && !address) || !items.length){
     throw new Error("Missing required order fields.");
   }
 
@@ -2026,7 +2685,7 @@ async function createOrder(payload, authProfile){
   }
 
   const storeSettings = await getStoreSettings();
-  const deliveryFee = calculateDeliveryFee(subtotal, storeSettings);
+  const deliveryFee = isPickup ? 0 : calculateDeliveryFee(subtotal, storeSettings);
   const redemption = rewardRedemptionId
     ? await getReservedRedemptionForUser(rewardRedemptionId, authProfile.user_id)
     : null;
@@ -2050,6 +2709,7 @@ async function createOrder(payload, authProfile){
     customer_name: customerName,
     contact,
     address,
+    fulfillment_type: fulfillmentType,
     subtotal,
     delivery_fee: deliveryFee,
     total,
@@ -2165,18 +2825,203 @@ async function createOrder(payload, authProfile){
   return { order: uiOrder, checkoutUrl };
 }
 
+function allowedStatusTransitions(currentStatus){
+  const current = uiStatusToDbStatus(currentStatus);
+  return {
+    pending_payment: ["order_placed", "cancelled"],
+    order_placed: ["preparing", "cancelled"],
+    preparing: ["in_transit", "out_for_delivery", "delivered", "cancelled"],
+    in_transit: ["out_for_delivery", "delivered", "cancelled"],
+    out_for_delivery: ["delivered", "cancelled"],
+    delivered: [],
+    cancelled: []
+  }[current] || [];
+}
+
+async function resetOrderPreparation(orderId){
+  try{
+    await supabaseRequest(`/rest/v1/order_preparation_items?order_id=eq.${orderId}`, {
+      method: "DELETE",
+      serviceRole: true
+    });
+  }catch(err){
+    if(!isMissingRelationError(err, "order_preparation_items")) throw err;
+  }
+  await supabaseRequest(`/rest/v1/orders?id=eq.${orderId}`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=minimal" },
+    body: {
+      prepared_at: null,
+      prepared_by: null,
+      preparation_completed: false
+    }
+  });
+}
+
+async function upsertPreparationItems(order, nextItems, actorProfile){
+  try{
+    await supabaseRequest(`/rest/v1/order_preparation_items?order_id=eq.${order.id}`, {
+      method: "DELETE",
+      serviceRole: true
+    });
+    if(!nextItems.length) return [];
+    await supabaseRequest("/rest/v1/order_preparation_items", {
+      method: "POST",
+      serviceRole: true,
+      headers: { Prefer: "return=minimal" },
+      body: nextItems.map((item) => ({
+        order_id: order.id,
+        product_sku: item.productId,
+        product_name: item.name,
+        required_qty: Number(item.qty || 0),
+        is_prepared: item.prepared === true,
+        prepared_by: item.prepared === true ? actorProfile?.user_id || null : null,
+        prepared_at: item.prepared === true ? new Date().toISOString() : null,
+        validation_message: item.validationMessage || null
+      }))
+    });
+  }catch(err){
+    if(isMissingRelationError(err, "order_preparation_items")){
+      throw httpError("Order preparation migration is required before using this workflow.", 500);
+    }
+    throw err;
+  }
+  return nextItems;
+}
+
+async function updateOrderPreparation(orderCode, payload, actorProfile){
+  const order = await getOrderByCodeDetailed(orderCode);
+  if(!order) throw httpError("Order not found.", 404);
+  if(statusLabel(order.status) !== "Order Placed" && statusLabel(order.status) !== "Preparing"){
+    throw httpError("Preparation is only available for placed or preparing orders.", 409);
+  }
+  const requestedItems = Array.isArray(payload.items) ? payload.items : [];
+  let productRows = await getProductsBySkus((order.items || []).map((item) => item.productId).filter(Boolean));
+  const existingIds = new Set(productRows.map(p => p.id));
+  const missing = (order.items || []).filter((item) => !existingIds.has(item.dbProductId));
+  for (const item of missing) {
+    try {
+      const encodedName = encodeURIComponent(String(item.name || "").trim());
+      const rows = await supabaseRequest(
+        `/rest/v1/products?select=id,sku,name,category_id,unit,price,stock_cases,quantity_per_case,image_url,is_active&name=ilike.${encodedName}&limit=1`,
+        { serviceRole: true }
+      );
+      if (rows?.[0] && !existingIds.has(rows[0].id)) {
+        productRows.push(rows[0]);
+        existingIds.add(rows[0].id);
+      }
+    } catch {}
+  }
+  const productBySku = new Map(productRows.map((product) => [String(product.sku || ""), product]));
+  const productById = new Map(productRows.map((product) => [String(product.id || ""), product]));
+  const nextItems = (order.items || []).map((item) => {
+    const incoming = requestedItems.find((entry) => String(entry.productId || "") === String(item.productId || "")) || {};
+    const prepared = incoming.prepared === true;
+    let validationMessage = "";
+    if(prepared){
+      const product = productBySku.get(String(item.productId || "")) || productById.get(String(item.dbProductId || ""));
+      if(product){
+        const currentStock = Number(product.stock_cases ?? product.stockCases ?? 0);
+        if(currentStock < Number(item.qty || 0)){
+          validationMessage = `${item.name} has only ${currentStock} case(s) remaining.`;
+        }
+      }
+    }
+    return {
+      productId: item.productId,
+      name: item.name,
+      qty: Number(item.qty || 0),
+      prepared: prepared && !validationMessage,
+      validationMessage
+    };
+  });
+  await upsertPreparationItems({ ...order, id: order.dbId || order.id }, nextItems, actorProfile);
+  const summary = buildPreparationSummary(order, nextItems.map((item) => ({
+    product_sku: item.productId,
+    product_name: item.name,
+    required_qty: item.qty,
+    is_prepared: item.prepared,
+    prepared_by: item.prepared ? actorProfile?.user_id || null : null,
+    prepared_at: item.prepared ? new Date().toISOString() : null,
+    validation_message: item.validationMessage || null
+  })));
+  await supabaseRequest(`/rest/v1/orders?order_code=eq.${encodeURIComponent(orderCode)}`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=minimal" },
+    body: { preparation_completed: summary.completed }
+  });
+  return await getOrderByCodeDetailed(orderCode);
+}
+
+async function prepareOrder(orderCode, actorProfile){
+  const orderRows = await supabaseRequest(`/rest/v1/orders?select=id,order_code,status,payment_method,prepared_at,prepared_by,preparation_completed&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`, {
+    serviceRole: true
+  });
+  const rawOrder = orderRows?.[0];
+  if(!rawOrder) throw httpError("Order not found.", 404);
+  const order = await getOrderByCodeDetailed(orderCode);
+  if(!order) throw httpError("Order not found.", 404);
+  const summary = order.preparation || buildPreparationSummary(order, []);
+  if(!summary.completed){
+    throw httpError("Complete all preparation checkboxes before preparing this order.", 409);
+  }
+  if(!allowedStatusTransitions(rawOrder.status).includes("preparing") && rawOrder.status !== "preparing"){
+    throw httpError("This order can no longer be prepared.", 409);
+  }
+  const stockDeducted = await hasOrderStatusEventNote(rawOrder.id, "Inventory deducted during preparation workflow.") || await hasOrderStatusEventNote(rawOrder.id, "QRPH payment confirmed via PayMongo webhook. Stock deducted.");
+  if(!stockDeducted){
+    await deductStockForOrder(rawOrder.id, {
+      action: "prepare_order",
+      updatedBy: actorProfile?.user_id,
+      updatedByName: actorProfile?.full_name || actorProfile?.email || actorProfile?.role || "Staff",
+      remarks: `Inventory deducted while preparing order ${orderCode}.`,
+      note: "Inventory deducted during preparation workflow."
+    });
+  }
+  await supabaseRequest(`/rest/v1/orders?id=eq.${rawOrder.id}`, {
+    method: "PATCH",
+    serviceRole: true,
+    headers: { Prefer: "return=minimal" },
+    body: {
+      status: "preparing",
+      preparation_completed: true,
+      prepared_at: new Date().toISOString(),
+      prepared_by: actorProfile?.user_id || null
+    }
+  });
+  await supabaseRequest("/rest/v1/order_status_events", {
+    method: "POST",
+    serviceRole: true,
+    headers: { Prefer: "return=minimal" },
+    body: [{
+      order_id: rawOrder.id,
+      status: "preparing",
+      note: `Order prepared by ${actorProfile?.full_name || actorProfile?.email || actorProfile?.role || "staff"}.`,
+      changed_by: actorProfile?.user_id || null
+    }]
+  });
+  return await getOrderByCodeDetailed(orderCode);
+}
+
 async function updateOrderStatus(orderCode, nextStatusInput, actorProfile){
   const nextStatus = uiStatusToDbStatus(nextStatusInput);
   if(!nextStatus){
     throw new Error("Invalid status.");
   }
-  const rows = await supabaseRequest(`/rest/v1/orders?select=id,order_code,status,payment_status,payment_method,user_id&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`, {
+  const rows = await supabaseRequest(`/rest/v1/orders?select=id,order_code,status,payment_status,payment_method,user_id,preparation_completed&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`, {
     serviceRole: true
   });
   const order = rows?.[0];
   if(!order) throw new Error("Order not found.");
-
-  // Admin/staff can override status flow from panel even if QRPH payment is still pending.
+  const allowed = allowedStatusTransitions(order.status);
+  if(nextStatus !== order.status && !allowed.includes(nextStatus)){
+    throw httpError(`Cannot change status from ${toUiStatus(order.status)} to ${toUiStatus(nextStatus)}.`, 409);
+  }
+  if(["preparing", "in_transit", "out_for_delivery", "delivered"].includes(nextStatus) && order.preparation_completed !== true){
+    throw httpError("Complete the preparation workflow before progressing this order.", 409);
+  }
 
   const updatedRows = await supabaseRequest(`/rest/v1/orders?order_code=eq.${encodeURIComponent(orderCode)}`, {
     method: "PATCH",
@@ -2201,7 +3046,7 @@ async function updateOrderStatus(orderCode, nextStatusInput, actorProfile){
 
 async function updateOrderDetails(orderCode, payload, actorProfile){
   const rows = await supabaseRequest(
-    `/rest/v1/orders?select=id,order_code,user_id,status,customer_name,contact,address,subtotal,delivery_fee,total,discount_amount&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`,
+    `/rest/v1/orders?select=id,order_code,user_id,status,customer_name,contact,address,fulfillment_type,subtotal,delivery_fee,total,discount_amount,preparation_completed&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`,
     { serviceRole: true }
   );
   const order = rows?.[0];
@@ -2218,7 +3063,15 @@ async function updateOrderDetails(orderCode, payload, actorProfile){
   const nextStatusInput = payload.status || "";
   const nextStatus = nextStatusInput ? uiStatusToDbStatus(nextStatusInput) : "";
   if(nextStatusInput && !nextStatus) throw new Error("Invalid status.");
-  if(nextStatus) body.status = nextStatus;
+  if(nextStatus){
+    if(!allowedStatusTransitions(order.status).includes(nextStatus) && nextStatus !== order.status){
+      throw httpError(`Cannot change status from ${toUiStatus(order.status)} to ${toUiStatus(nextStatus)}.`, 409);
+    }
+    if(["preparing", "in_transit", "out_for_delivery", "delivered"].includes(nextStatus) && order.preparation_completed !== true){
+      throw httpError("Complete the preparation workflow before progressing this order.", 409);
+    }
+    body.status = nextStatus;
+  }
 
   const items = Array.isArray(payload.items) ? payload.items : null;
   if(items){
@@ -2251,11 +3104,14 @@ async function updateOrderDetails(orderCode, payload, actorProfile){
       });
     }
     const settings = await getStoreSettings();
-    const deliveryFee = calculateDeliveryFee(subtotal, settings);
+    const deliveryFee = normalizeFulfillmentType(order.fulfillment_type) === "pickup" ? 0 : calculateDeliveryFee(subtotal, settings);
     const discountAmount = Number(order.discount_amount || 0);
     body.subtotal = subtotal;
     body.delivery_fee = deliveryFee;
     body.total = Math.max(0, Number((subtotal + deliveryFee - discountAmount).toFixed(2)));
+    body.preparation_completed = false;
+    body.prepared_at = null;
+    body.prepared_by = null;
   }
 
   if(!Object.keys(body).length){
@@ -2280,6 +3136,10 @@ async function updateOrderDetails(orderCode, payload, actorProfile){
       changed_by: actorProfile.user_id
     }]
   });
+
+  if(items){
+    await resetOrderPreparation(order.id);
+  }
 
   return updatedRows?.[0] || order;
 }
@@ -2447,7 +3307,7 @@ async function hasOrderStatusEventNote(orderId, note){
   return Boolean(rows?.length);
 }
 
-async function deductStockForOrder(orderId){
+async function deductStockForOrder(orderId, context = {}){
   const items = await supabaseRequest(
     `/rest/v1/order_items?select=product_id,qty,name&order_id=eq.${orderId}`,
     { serviceRole: true }
@@ -2466,8 +3326,37 @@ async function deductStockForOrder(orderId){
       method: "PATCH",
       serviceRole: true,
       headers: { Prefer: "return=minimal" },
-      body: { stock_cases: next }
+        body: { stock_cases: next }
     });
+    await createInventoryHistoryEntry({
+      productId: product.id,
+      productName: product.name || item.name || "",
+      orderId,
+      beforeStock: current,
+      afterStock: next,
+      stockAdded: 0,
+      stockDeducted: Number(item.qty || 0),
+      action: context.action || "order_deduction",
+      remarks: context.remarks || `Inventory deducted for order ${orderId}.`,
+      updatedBy: context.updatedBy || null,
+      updatedByName: context.updatedByName || null
+    });
+  }
+  if(context.note){
+    const exists = await hasOrderStatusEventNote(orderId, context.note);
+    if(!exists){
+      await supabaseRequest("/rest/v1/order_status_events", {
+        method: "POST",
+        serviceRole: true,
+        headers: { Prefer: "return=minimal" },
+        body: [{
+          order_id: orderId,
+          status: "preparing",
+          note: context.note,
+          changed_by: context.updatedBy || null
+        }]
+      });
+    }
   }
 }
 
@@ -2498,18 +3387,12 @@ async function markOrderPaidFromWebhook({ orderCode, checkoutSessionId, paymentI
 
   const stockAlreadyDeducted = await hasOrderStatusEventNote(order.id, STOCK_MARKER_NOTE);
   if(!stockAlreadyDeducted){
-    await deductStockForOrder(order.id);
-    console.log("[paymongo webhook] stock deducted for order", order.order_code);
-    await supabaseRequest("/rest/v1/order_status_events", {
-      method: "POST",
-      serviceRole: true,
-      headers: { Prefer: "return=minimal" },
-      body: [{
-        order_id: order.id,
-        status: "order_placed",
-        note: STOCK_MARKER_NOTE
-      }]
+    await deductStockForOrder(order.id, {
+      action: "payment_confirmed",
+      remarks: `Inventory deducted after QRPH payment confirmation for ${order.order_code}.`,
+      note: STOCK_MARKER_NOTE
     });
+    console.log("[paymongo webhook] stock deducted for order", order.order_code);
   }
 
   await supabaseRequest(`/rest/v1/payments?order_id=eq.${order.id}`, {
@@ -2637,6 +3520,7 @@ async function handleApi(req, res, url){
 
   if(req.method === "GET" && url.pathname === "/api/config"){
     const storeSettings = await getStoreSettings();
+    assertProfileIsActive(profile);
     sendJson(res, 200, {
       supabaseUrl: SUPABASE_URL,
       supabaseAnonKey: SUPABASE_ANON_KEY,
@@ -2729,6 +3613,13 @@ async function handleApi(req, res, url){
     return true;
   }
 
+  if(req.method === "GET" && url.pathname === "/api/auth/check-email"){
+    const email = validateGmailEmail(url.searchParams.get("email") || "");
+    const existing = await getProfileByEmail(email);
+    sendJson(res, 200, { email, exists: Boolean(existing) });
+    return true;
+  }
+
   if(req.method === "POST" && url.pathname === "/api/auth/register/verification-code"){
     const payload = await readJson(req);
     const result = await createRegistrationVerificationCode(payload);
@@ -2810,7 +3701,7 @@ async function handleApi(req, res, url){
   }
 
   if(req.method === "GET" && url.pathname.startsWith("/api/locations/provinces/") && url.pathname.endsWith("/cities")){
-    const provinceCode = decodeURIComponent(url.pathname.replace("/api/locations/provinces/", "").replace("/cities", ""));
+    const provinceCode = decodeURIComponent(url.pathname.replace("/api/locations/provinces/", "").replace(/\/cities$/, ""));
     const cities = await listPsgcProvinceCities(provinceCode);
     sendJson(res, 200, { cities });
     return true;
@@ -2820,6 +3711,21 @@ async function handleApi(req, res, url){
     const auth = await requireAuth(req);
     const orders = await listOrdersForUserId(auth.profile.user_id);
     sendJson(res, 200, { orders });
+    return true;
+  }
+
+  if(req.method === "GET" && url.pathname.startsWith("/api/orders/") && url.pathname.endsWith("/invoice")){
+    const auth = await requireAuth(req, ["customer", "admin", "staff"]);
+    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace(/\/invoice$/, ""));
+    const invoice = await getOrderInvoice(orderCode);
+    if(auth.profile.role === "customer"){
+      const order = await getOrderForUserId(orderCode, auth.profile.user_id);
+      if(!order){
+        sendJson(res, 404, { error: "Order not found" });
+        return true;
+      }
+    }
+    sendJson(res, 200, { invoice });
     return true;
   }
 
@@ -2837,7 +3743,7 @@ async function handleApi(req, res, url){
 
   if(req.method === "POST" && url.pathname.startsWith("/api/orders/") && url.pathname.endsWith("/reconcile-payment")){
     const auth = await requireAuth(req, ["customer", "admin", "staff"]);
-    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace("/reconcile-payment", ""));
+    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace(/\/reconcile-payment$/, ""));
     const result = await reconcilePaymongoPayment(orderCode, auth.profile);
     sendJson(res, 200, result);
     return true;
@@ -2845,7 +3751,7 @@ async function handleApi(req, res, url){
 
   if(req.method === "POST" && url.pathname.startsWith("/api/orders/") && url.pathname.endsWith("/repay")){
     const auth = await requireAuth(req, ["customer", "admin", "staff"]);
-    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace("/repay", ""));
+    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace(/\/repay$/, ""));
     const payload = await readJson(req);
     const result = await repayOrder(orderCode, auth.profile, payload);
     sendJson(res, 200, result);
@@ -2862,20 +3768,37 @@ async function handleApi(req, res, url){
 
   if(req.method === "PATCH" && url.pathname.startsWith("/api/orders/") && url.pathname.endsWith("/details")){
     const auth = await requireAuth(req, ["admin", "staff"]);
-    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace("/details", ""));
+    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace(/\/details$/, ""));
     const payload = await readJson(req);
     await updateOrderDetails(orderCode, payload, auth.profile);
-    const refreshed = await getOrderForUserId(orderCode, (await supabaseRequest(`/rest/v1/orders?select=user_id&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`, { serviceRole: true }))?.[0]?.user_id);
+    const refreshed = await getOrderByCodeDetailed(orderCode);
     sendJson(res, 200, { ok: true, order: refreshed });
+    return true;
+  }
+
+  if(req.method === "PATCH" && url.pathname.startsWith("/api/orders/") && url.pathname.endsWith("/preparation")){
+    const auth = await requireAuth(req, ["admin", "staff"]);
+    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace(/\/preparation$/, ""));
+    const payload = await readJson(req);
+    const order = await updateOrderPreparation(orderCode, payload, auth.profile);
+    sendJson(res, 200, { ok: true, order });
+    return true;
+  }
+
+  if(req.method === "POST" && url.pathname.startsWith("/api/orders/") && url.pathname.endsWith("/prepare")){
+    const auth = await requireAuth(req, ["admin", "staff"]);
+    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace(/\/prepare$/, ""));
+    const order = await prepareOrder(orderCode, auth.profile);
+    sendJson(res, 200, { ok: true, order });
     return true;
   }
 
   if(req.method === "PATCH" && url.pathname.startsWith("/api/orders/") && url.pathname.endsWith("/status")){
     const auth = await requireAuth(req, ["admin", "staff"]);
-    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace("/status", ""));
+    const orderCode = decodeURIComponent(url.pathname.replace("/api/orders/", "").replace(/\/status$/, ""));
     const payload = await readJson(req);
     await updateOrderStatus(orderCode, payload.status, auth.profile);
-    const refreshed = await getOrderForUserId(orderCode, (await supabaseRequest(`/rest/v1/orders?select=user_id&order_code=eq.${encodeURIComponent(orderCode)}&limit=1`, { serviceRole: true }))?.[0]?.user_id);
+    const refreshed = await getOrderByCodeDetailed(orderCode);
     sendJson(res, 200, { ok: true, order: refreshed });
     return true;
   }
@@ -2926,17 +3849,17 @@ async function handleApi(req, res, url){
     return true;
   }
   if(req.method === "POST" && url.pathname === "/api/panel/admin/inventory/products"){
-    await requireAuth(req, ["admin"]);
+    const auth = await requireAuth(req, ["admin"]);
     const payload = await readJson(req);
-    const product = await createInventoryProduct(payload);
+    const product = await createInventoryProduct(payload, auth.profile);
     sendJson(res, 201, { ok: true, product });
     return true;
   }
   if(req.method === "PATCH" && url.pathname.startsWith("/api/panel/admin/inventory/products/by-name/")){
-    await requireAuth(req, ["admin"]);
+    const auth = await requireAuth(req, ["admin"]);
     const name = decodeURIComponent(url.pathname.replace("/api/panel/admin/inventory/products/by-name/", ""));
     const payload = await readJson(req);
-    const product = await updateInventoryProductByName(name, payload);
+    const product = await updateInventoryProductByName(name, payload, auth.profile);
     sendJson(res, 200, { ok: true, product });
     return true;
   }
@@ -2948,9 +3871,9 @@ async function handleApi(req, res, url){
     return true;
   }
   if(req.method === "POST" && url.pathname === "/api/panel/admin/inventory/restock"){
-    await requireAuth(req, ["admin"]);
+    const auth = await requireAuth(req, ["admin"]);
     const payload = await readJson(req);
-    const product = await restockInventoryProductByName(payload);
+    const product = await restockInventoryProductByName(payload, auth.profile);
     sendJson(res, 200, { ok: true, product });
     return true;
   }
@@ -2978,9 +3901,54 @@ async function handleApi(req, res, url){
     sendJson(res, 200, { customers: await getPanelCustomers() });
     return true;
   }
+  if(req.method === "GET" && url.pathname === "/api/panel/admin/staff"){
+    await requireAuth(req, ["admin"]);
+    sendJson(res, 200, { staff: await listStaffAccounts() });
+    return true;
+  }
+  if(req.method === "POST" && url.pathname === "/api/panel/admin/staff"){
+    await requireAuth(req, ["admin"]);
+    const payload = await readJson(req);
+    const staff = await createStaffAccount(payload);
+    sendJson(res, 201, { ok: true, staff });
+    return true;
+  }
+  if(req.method === "PATCH" && url.pathname.startsWith("/api/panel/admin/staff/")){
+    await requireAuth(req, ["admin"]);
+    const userId = decodeURIComponent(url.pathname.replace("/api/panel/admin/staff/", ""));
+    const payload = await readJson(req);
+    const staff = await updateStaffAccount(userId, payload);
+    sendJson(res, 200, { ok: true, staff });
+    return true;
+  }
+  if(req.method === "POST" && url.pathname.startsWith("/api/panel/admin/staff/") && url.pathname.endsWith("/reset-password")){
+    await requireAuth(req, ["admin"]);
+    const userId = decodeURIComponent(url.pathname.replace("/api/panel/admin/staff/", "").replace(/\/reset-password$/, ""));
+    const result = await resetStaffPassword(userId, await readJson(req));
+    sendJson(res, 200, result);
+    return true;
+  }
+  if(req.method === "POST" && url.pathname.startsWith("/api/panel/admin/staff/") && url.pathname.endsWith("/disable")){
+    await requireAuth(req, ["admin"]);
+    const userId = decodeURIComponent(url.pathname.replace("/api/panel/admin/staff/", "").replace(/\/disable$/, ""));
+    const staff = await disableStaffAccount(userId);
+    sendJson(res, 200, { ok: true, staff });
+    return true;
+  }
   if(req.method === "GET" && url.pathname === "/api/panel/admin/reports"){
     await requireAuth(req, ["admin"]);
     sendJson(res, 200, { reports: await getPanelReports() });
+    return true;
+  }
+  if(req.method === "GET" && url.pathname.startsWith("/api/panel/admin/reports/")){
+    await requireAuth(req, ["admin"]);
+    const reportKey = decodeURIComponent(url.pathname.replace("/api/panel/admin/reports/", ""));
+    const detail = await getPanelReportDetail(reportKey, {
+      range: url.searchParams.get("range") || "all",
+      from: url.searchParams.get("from") || "",
+      to: url.searchParams.get("to") || ""
+    });
+    sendJson(res, 200, detail);
     return true;
   }
   if(req.method === "GET" && url.pathname === "/api/panel/admin/rewards"){
@@ -3027,6 +3995,61 @@ async function handleApi(req, res, url){
   if(req.method === "GET" && url.pathname === "/api/panel/staff/inventory"){
     await requireAuth(req, ["staff", "admin"]);
     sendJson(res, 200, await getPanelInventory());
+    return true;
+  }
+  if(req.method === "GET" && url.pathname === "/api/panel/staff/categories"){
+    await requireAuth(req, ["staff", "admin"]);
+    sendJson(res, 200, { categories: await listAdminCategories() });
+    return true;
+  }
+  if(req.method === "POST" && url.pathname === "/api/panel/staff/categories"){
+    await requireAuth(req, ["staff", "admin"]);
+    const payload = await readJson(req);
+    const categories = await addAdminCategory(payload.name);
+    sendJson(res, 201, { ok: true, categories });
+    return true;
+  }
+  if(req.method === "DELETE" && url.pathname.startsWith("/api/panel/staff/categories/")){
+    await requireAuth(req, ["staff", "admin"]);
+    const name = decodeURIComponent(url.pathname.replace("/api/panel/staff/categories/", ""));
+    const categories = await deleteAdminCategory(name);
+    sendJson(res, 200, { ok: true, categories });
+    return true;
+  }
+  if(req.method === "POST" && url.pathname === "/api/panel/staff/inventory/product-image"){
+    await requireAuth(req, ["staff", "admin"]);
+    const payload = await readJson(req, { limit: 7_500_000 });
+    const uploaded = await uploadProductImage(payload);
+    sendJson(res, 201, { ok: true, ...uploaded });
+    return true;
+  }
+  if(req.method === "POST" && url.pathname === "/api/panel/staff/inventory/products"){
+    const auth = await requireAuth(req, ["staff", "admin"]);
+    const payload = await readJson(req);
+    const product = await createInventoryProduct(payload, auth.profile);
+    sendJson(res, 201, { ok: true, product });
+    return true;
+  }
+  if(req.method === "PATCH" && url.pathname.startsWith("/api/panel/staff/inventory/products/by-name/")){
+    const auth = await requireAuth(req, ["staff", "admin"]);
+    const name = decodeURIComponent(url.pathname.replace("/api/panel/staff/inventory/products/by-name/", ""));
+    const payload = await readJson(req);
+    const product = await updateInventoryProductByName(name, payload, auth.profile);
+    sendJson(res, 200, { ok: true, product });
+    return true;
+  }
+  if(req.method === "DELETE" && url.pathname.startsWith("/api/panel/staff/inventory/products/by-name/")){
+    await requireAuth(req, ["staff", "admin"]);
+    const name = decodeURIComponent(url.pathname.replace("/api/panel/staff/inventory/products/by-name/", ""));
+    await deleteInventoryProductByName(name);
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+  if(req.method === "POST" && url.pathname === "/api/panel/staff/inventory/restock"){
+    const auth = await requireAuth(req, ["staff", "admin"]);
+    const payload = await readJson(req);
+    const product = await restockInventoryProductByName(payload, auth.profile);
+    sendJson(res, 200, { ok: true, product });
     return true;
   }
 
@@ -3081,6 +4104,7 @@ if(!process.env.VERCEL){
 }
 
 export {
+  assertProfileIsActive,
   calculateDeliveryFee,
   PRODUCT_IMAGE_MAX_BYTES,
   buildEmailJsVerificationPayload,
@@ -3095,6 +4119,7 @@ export {
   paymongoCheckoutLooksPaid,
   parsePaymongoWebhookEvent,
   parseProductImagePayload,
+  validateStaffAccountPayload,
   validateCustomerRegistration,
   validatePasswordComplexity,
   validatePhilippineContact,

@@ -98,9 +98,11 @@ test("validateCustomerRegistration rejects invalid Philippine contact", () => {
   );
 });
 
-test("validatePasswordComplexity only requires a non-empty password", () => {
-  assert.equal(server.validatePasswordComplexity("a"), "a");
-  assert.equal(server.validatePasswordComplexity("!"), "!");
+test("validatePasswordComplexity requires a minimum-length password", () => {
+  assert.throws(
+    () => server.validatePasswordComplexity("short"),
+    /at least 8 characters/
+  );
   assert.equal(server.validatePasswordComplexity("password123"), "password123");
   assert.throws(
     () => server.validatePasswordComplexity(""),
@@ -114,6 +116,42 @@ test("validatePhilippineContact accepts only 09-prefixed 11 digit mobile numbers
   assert.throws(() => server.validatePhilippineContact("0912345678"), /Philippine mobile format/);
   assert.throws(() => server.validatePhilippineContact("091234567890"), /Philippine mobile format/);
   assert.throws(() => server.validatePhilippineContact("09123abc789"), /Philippine mobile format/);
+});
+
+test("validateStaffAccountPayload validates staff fields and matching password", () => {
+  const result = server.validateStaffAccountPayload({
+    fullName: "Staff Member",
+    email: "STAFF@gmail.com",
+    contact: "09123456789",
+    password: "password123",
+    confirmPassword: "password123"
+  });
+
+  assert.deepEqual(result, {
+    fullName: "Staff Member",
+    email: "staff@gmail.com",
+    contact: "09123456789",
+    password: "password123"
+  });
+  assert.throws(
+    () => server.validateStaffAccountPayload({
+      fullName: "Staff Member",
+      email: "staff@gmail.com",
+      contact: "09123456789",
+      password: "password123",
+      confirmPassword: "different"
+    }),
+    /Passwords do not match/
+  );
+});
+
+test("assertProfileIsActive blocks disabled profiles", () => {
+  assert.equal(server.assertProfileIsActive({ email: "active@gmail.com", is_active: true }), true);
+  assert.equal(server.assertProfileIsActive({ email: "legacy@gmail.com" }), true);
+  assert.throws(
+    () => server.assertProfileIsActive({ email: "disabled@gmail.com", is_active: false }),
+    /This account has been disabled/
+  );
 });
 
 test("validateQuantityPerCase requires a positive integer", () => {
