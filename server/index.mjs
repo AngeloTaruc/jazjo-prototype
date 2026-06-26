@@ -550,11 +550,8 @@ async function validateDeliveryAddress(payload){
 
 function validatePasswordComplexity(password){
   const value = String(password || "");
-  if(value.length < 8){
-    throw httpError("Password must be at least 8 characters.");
-  }
-  if(!/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9]/.test(value)){
-    throw httpError("Password must include uppercase, lowercase, number, and special character.");
+  if(!value.trim()){
+    throw httpError("Password is required.");
   }
   return value;
 }

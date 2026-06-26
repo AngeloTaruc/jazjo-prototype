@@ -199,7 +199,7 @@ export default function AdminPanel({ isDark, onToggleTheme }) {
   ];
 
   return (
-    <div className={`flex min-h-screen transition-colors ${isDark ? "bg-[#080b12] text-slate-100" : "bg-slate-50 text-slate-950"}`}>
+    <div className={`panel-readable flex min-h-screen transition-colors ${isDark ? "bg-[#080b12] text-slate-100" : "bg-slate-50 text-slate-950"}`}>
       <Toast.Provider placement="top end" maxVisibleToasts={4} />
       <aside className={`fixed left-0 top-0 z-30 h-full w-56 border-r transition-colors max-md:hidden ${isDark ? "border-white/10 bg-[#0c101a]" : "border-slate-200 bg-white"}`}>
         <div className="flex h-full flex-col">
@@ -372,7 +372,7 @@ function AdminDashboardPage({ setMessage }) {
       <Modal isOpen={!!detail} onOpenChange={() => setDetail(null)}>
         <Modal.Backdrop>
           <Modal.Container size="3xl">
-            <Modal.Dialog>
+            <Modal.Dialog className="themed-modal-shell">
               <Modal.Header>
                 <h2 className="text-lg font-black text-white">{detailTitle[detail] || "Details"}</h2>
               </Modal.Header>
@@ -1480,17 +1480,17 @@ function AdminDeliveryPage({ setMessage }) {
             <Modal.Dialog>
               <Modal.Header>
                 <div>
-                  <p className="text-xs font-bold uppercase text-emerald-300">Delivery Details</p>
-                  <h2 className="text-lg font-black text-white">Order {selectedDelivery?.orderId}</h2>
+                  <p className="themed-modal-accent text-xs font-bold uppercase">Delivery Details</p>
+                  <h2 className="themed-modal-title text-lg font-black">Order {selectedDelivery?.orderId}</h2>
                 </div>
               </Modal.Header>
               <Modal.Body className="space-y-4">
-                <Card className="border border-white/10 bg-white/[.04]">
+                <Card className="themed-modal-card">
                   <CardBody className="gap-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <p className="text-xs font-bold uppercase text-slate-500">Order Progress</p>
-                        <p className="text-sm text-slate-300">Order: <strong>{selectedDelivery?.orderId || "-"}</strong></p>
+                        <p className="themed-modal-label text-xs font-bold uppercase">Order Progress</p>
+                        <p className="themed-modal-value text-sm">Order: <strong>{selectedDelivery?.orderId || "-"}</strong></p>
                       </div>
                       <Chip
                         color={statusLabel(selectedDelivery?.status) === "Delivered" ? "success" : statusLabel(selectedDelivery?.status) === "Cancelled" ? "danger" : "warning"}
@@ -1503,19 +1503,34 @@ function AdminDeliveryPage({ setMessage }) {
                   </CardBody>
                 </Card>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <DetailBlock label="Recipient Name" value={selectedDelivery?.recipientName || selectedDelivery?.customerName || "-"} />
-                  <DetailBlock label="Contact Number" value={selectedDelivery?.contact || selectedDelivery?.recipientContact || "-"} />
-                  <DetailBlock label="Delivery Status" value={statusLabel(selectedDelivery?.status)} />
-                  <DetailBlock label="Delivery Date" value={selectedDelivery?.deliveryDate || selectedDelivery?.updatedAt || "-"} />
+                  <div className="themed-modal-card rounded-xl px-4 py-3">
+                    <p className="delivery-field-label text-xs font-bold uppercase">Recipient Name</p>
+                    <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.recipientName || selectedDelivery?.customerName || "-"}</p>
+                  </div>
+                  <div className="themed-modal-card rounded-xl px-4 py-3">
+                    <p className="delivery-field-label text-xs font-bold uppercase">Contact Number</p>
+                    <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.contact || selectedDelivery?.recipientContact || "-"}</p>
+                  </div>
+                  <div className="themed-modal-card rounded-xl px-4 py-3">
+                    <p className="delivery-field-label text-xs font-bold uppercase">Delivery Status</p>
+                    <p className="delivery-field-value mt-1 font-semibold">{statusLabel(selectedDelivery?.status) || "-"}</p>
+                  </div>
+                  <div className="themed-modal-card rounded-xl px-4 py-3">
+                    <p className="delivery-field-label text-xs font-bold uppercase">Delivery Date</p>
+                    <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.deliveryDate || selectedDelivery?.updatedAt || "-"}</p>
+                  </div>
                 </div>
-                <DetailBlock label="Delivery Address" value={selectedDelivery?.deliveryAddress || selectedDelivery?.address || "-"} />
-                <Card className="border border-white/10 bg-white/[.04]">
+                <div className="themed-modal-card rounded-xl px-4 py-3">
+                  <p className="delivery-field-label text-xs font-bold uppercase">Delivery Address</p>
+                  <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.deliveryAddress || selectedDelivery?.address || "-"}</p>
+                </div>
+                <Card className="themed-modal-card">
                   <CardBody className="gap-3">
-                    <p className="text-xs font-bold uppercase text-slate-500">Items</p>
+                    <p className="themed-modal-label text-xs font-bold uppercase">Items</p>
                     <div className="grid gap-2">
                       {selectedOrderItems.map((item, idx) => (
-                        <div key={`${item?.orderId || "order"}-${item?.productName || idx}`} className="flex items-center justify-between gap-3 rounded-xl bg-black/20 px-3 py-2">
-                          <span className="font-semibold text-white">{item?.productName || "-"}</span>
+                        <div key={`${item?.orderId || "order"}-${item?.productName || idx}`} className="themed-modal-item flex items-center justify-between gap-3 rounded-xl px-3 py-2">
+                          <span className="themed-modal-title font-semibold">{item?.productName || "-"}</span>
                           <Chip size="sm" variant="flat">x{formatQty(item?.qty || 0)}</Chip>
                         </div>
                       ))}
@@ -1845,13 +1860,3 @@ function KpiCard({ label, value, icon, onPress }) {
   );
 }
 
-function DetailBlock({ label, value }) {
-  return (
-    <Card className="border border-white/10 bg-white/[.04]">
-      <CardBody className="gap-1">
-        <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
-        <p className="font-semibold text-white">{value || "-"}</p>
-      </CardBody>
-    </Card>
-  );
-}

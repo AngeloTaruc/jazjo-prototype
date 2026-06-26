@@ -73,6 +73,68 @@ function Table({ children }) {
   return <table className="w-full text-left text-sm">{children}</table>;
 }
 
+function DeliveryTimeline({ status }) {
+  const timelineSteps = ["Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered"];
+  const current = statusLabel(status);
+  const currentIndex = Math.max(0, timelineSteps.indexOf(current));
+  return (
+    <div className="flex items-center gap-3 overflow-x-auto pb-2">
+      {timelineSteps.map((step, idx) => {
+        const done = idx <= currentIndex;
+        return (
+          <div key={step} className="flex min-w-max items-center gap-3">
+            <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ${
+              done ? "bg-amber-500 text-white" : "bg-white/10 text-slate-500"
+            }`}>
+              {done ? "\u2713" : idx + 1}
+            </div>
+            <span className={`text-sm ${done ? "font-semibold text-amber-300" : "text-slate-500"}`}>{step}</span>
+            {idx < timelineSteps.length - 1 ? <div className={`h-px w-12 ${done ? "bg-amber-500/50" : "bg-white/10"}`} /> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function collapseDeliveryTracks(tracks = []) {
+  const byOrder = new Map();
+  for (const track of tracks || []) {
+    const orderId = String(track?.orderId || track?.id || "").trim();
+    if (!orderId) continue;
+    const existing = byOrder.get(orderId);
+    const trackItems = Array.isArray(track.items) && track.items.length
+      ? track.items.map((item) => ({
+        productName: item.productName || item.name || track.productName || "-",
+        name: item.name || item.productName || track.productName || "-",
+        qty: Number(item.qty || 0)
+      }))
+      : [{
+        productName: track.productName || "-",
+        name: track.productName || "-",
+        qty: Number(track.qty || 0)
+      }];
+    if (!existing) {
+      byOrder.set(orderId, {
+        ...track,
+        orderId,
+        items: trackItems,
+        qty: trackItems.reduce((sum, item) => sum + Number(item.qty || 0), 0)
+      });
+      continue;
+    }
+    existing.items = [...(existing.items || []), ...trackItems];
+    existing.qty = Number(existing.qty || 0) + trackItems.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+    existing.productName = `${existing.items.length} items`;
+    existing.updatedAt = track.updatedAt || existing.updatedAt;
+    existing.status = track.status || existing.status;
+  }
+  return [...byOrder.values()].map((track) => ({
+    ...track,
+    productName: track.items?.length > 1 ? `${track.items.length} items` : (track.items?.[0]?.name || track.productName || "-")
+  }));
+}
+
 function PanelPagination({ total, page, onChange, label }) {
   if (total <= 1) return null;
   return (
@@ -153,7 +215,7 @@ export default function StaffPanel({ isDark, onToggleTheme }) {
   ];
 
   return (
-    <div className={`flex min-h-screen transition-colors ${isDark ? "bg-[#080b12] text-slate-100" : "bg-slate-50 text-slate-950"}`}>
+    <div className={`panel-readable flex min-h-screen transition-colors ${isDark ? "bg-[#080b12] text-slate-100" : "bg-slate-50 text-slate-950"}`}>
       <Toast.Provider placement="top end" maxVisibleToasts={4} />
       <aside className={`fixed left-0 top-0 z-30 h-full w-48 border-r transition-colors max-md:hidden ${isDark ? "border-white/10 bg-[#0c101a]" : "border-slate-200 bg-white"}`}>
         <div className="flex h-full flex-col">
@@ -310,7 +372,7 @@ function StaffDashboardPage({ setMessage }) {
       <Modal isOpen={!!detail} onOpenChange={() => setDetail(null)}>
         <Modal.Backdrop>
           <Modal.Container size="2xl">
-            <Modal.Dialog>
+            <Modal.Dialog className="themed-modal-shell">
               <Modal.Header>
                 <div>
                   <p className="text-xs font-bold uppercase text-amber-300">Staff Dashboard Details</p>
@@ -713,6 +775,7 @@ function StaffDeliveryPage({ setMessage }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const [selectedDelivery, setSelectedDelivery] = useState(null);
   const perPage = 10;
   const load = useCallback(async () => {
     try {
@@ -730,12 +793,16 @@ function StaffDeliveryPage({ setMessage }) {
     const interval = setInterval(load, 8000);
     return () => clearInterval(interval);
   }, []);
-  const tracks = data?.productTracks || [];
-  const activeOrder = data?.activeOrder;
+  const tracks = collapseDeliveryTracks(data?.productTracks || []);
   const totalPages = Math.max(1, Math.ceil(tracks.length / perPage));
   const safePage = Math.min(page, totalPages);
   const paged = tracks.slice((safePage - 1) * perPage, safePage * perPage);
-  const timelineSteps = ["Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered"];
+  const selectedOrderMatches = selectedDelivery
+    ? tracks.filter((track) => String(track.orderId) === String(selectedDelivery.orderId))
+    : [];
+  const selectedOrderItems = selectedOrderMatches.length
+    ? selectedOrderMatches.flatMap((track) => track.items?.length ? track.items : [track])
+    : selectedDelivery ? [selectedDelivery] : [];
   if (loading) {
     return (
       <div className="space-y-5">
@@ -746,32 +813,6 @@ function StaffDeliveryPage({ setMessage }) {
   }
   return (
     <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      {activeOrder ? (
-        <Card>
-          <CardHeader><h2 className="text-lg font-black">Active Delivery</h2></CardHeader>
-          <CardBody>
-            <p className="text-sm text-slate-400 mb-4">Order: <strong>{activeOrder.id || "Active order"}</strong></p>
-            <div className="flex items-center gap-3 overflow-x-auto pb-2">
-              {timelineSteps.map((step, idx) => {
-                const current = statusLabel(activeOrder.status);
-                const stepIdx = timelineSteps.indexOf(current);
-                const done = idx <= stepIdx;
-                return (
-                  <div key={step} className="flex items-center gap-3 min-w-max">
-                    <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ${
-                      done ? "bg-amber-500 text-white" : "bg-white/10 text-slate-500"
-                    }`}>
-                      {done ? "\u2713" : idx + 1}
-                    </div>
-                    <span className={`text-sm ${done ? "text-amber-300 font-semibold" : "text-slate-500"}`}>{step}</span>
-                    {idx < timelineSteps.length - 1 ? <div className={`h-px w-12 ${done ? "bg-amber-500/50" : "bg-white/10"}`} /> : null}
-                  </div>
-                );
-              })}
-            </div>
-          </CardBody>
-        </Card>
-      ) : null}
       <Card>
         <CardHeader className="justify-between">
           <h2 className="text-lg font-black">Product Delivery Tracking</h2>
@@ -787,12 +828,21 @@ function StaffDeliveryPage({ setMessage }) {
             <>
               <div className="overflow-x-auto">
                 <Table>
-                  <THead><Th>ORDER</Th><Th>PRODUCT</Th><Th>QTY</Th><Th>CUSTOMER</Th><Th>STATUS</Th><Th>UPDATED</Th></THead>
+                  <THead><Th>ORDER</Th><Th>PRODUCT</Th><Th>QTY</Th><Th>CUSTOMER</Th><Th>STATUS</Th><Th>UPDATED</Th><Th>ACTION</Th></THead>
                   <TBody>
                     {paged.map((track, idx) => (
                       <Tr key={idx}>
                         <Td><span className="font-semibold">{track.orderId}</span></Td>
-                        <Td>{track.productName}</Td>
+                        <Td>
+                          <div className="flex flex-col gap-1">
+                            <span className="font-semibold">{track.productName}</span>
+                            {track.items?.length > 1 ? (
+                              <span className="text-xs text-slate-400">
+                                {track.items.map((item) => item.name || item.productName).filter(Boolean).join(", ")}
+                              </span>
+                            ) : null}
+                          </div>
+                        </Td>
                         <Td>{formatQty(track.qty)}</Td>
                         <Td>{track.customerName}</Td>
                         <Td>
@@ -805,6 +855,11 @@ function StaffDeliveryPage({ setMessage }) {
                           </Chip>
                         </Td>
                         <Td className="text-sm text-slate-400">{track.updatedAt || "-"}</Td>
+                        <Td>
+                          <Button size="sm" variant="flat" onPress={() => setSelectedDelivery(track)}>
+                            Details
+                          </Button>
+                        </Td>
                       </Tr>
                     ))}
                   </TBody>
@@ -819,6 +874,77 @@ function StaffDeliveryPage({ setMessage }) {
           )}
         </CardBody>
       </Card>
+      <Modal isOpen={!!selectedDelivery} onOpenChange={() => setSelectedDelivery(null)}>
+        <Modal.Backdrop>
+          <Modal.Container size="lg">
+            <Modal.Dialog>
+              <Modal.Header>
+                <div>
+                  <p className="text-xs font-bold uppercase text-amber-300">Delivery Details</p>
+                  <h2 className="text-lg font-black text-white">Order {selectedDelivery?.orderId}</h2>
+                </div>
+              </Modal.Header>
+              <Modal.Body className="space-y-4">
+                <Card className="themed-modal-card">
+                  <CardBody className="gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="themed-modal-label text-xs font-bold uppercase">Order Progress</p>
+                        <p className="themed-modal-value text-sm">Order: <strong>{selectedDelivery?.orderId || "-"}</strong></p>
+                      </div>
+                      <Chip
+                        color={statusLabel(selectedDelivery?.status) === "Delivered" ? "success" : statusLabel(selectedDelivery?.status) === "Cancelled" ? "danger" : "warning"}
+                        variant="flat"
+                      >
+                        {statusLabel(selectedDelivery?.status)}
+                      </Chip>
+                    </div>
+                    <DeliveryTimeline status={selectedDelivery?.status} />
+                  </CardBody>
+                </Card>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="themed-modal-card rounded-xl px-4 py-3">
+                    <p className="delivery-field-label text-xs font-bold uppercase">Recipient Name</p>
+                    <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.recipientName || selectedDelivery?.customerName || "-"}</p>
+                  </div>
+                  <div className="themed-modal-card rounded-xl px-4 py-3">
+                    <p className="delivery-field-label text-xs font-bold uppercase">Contact Number</p>
+                    <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.contact || selectedDelivery?.recipientContact || "-"}</p>
+                  </div>
+                  <div className="themed-modal-card rounded-xl px-4 py-3">
+                    <p className="delivery-field-label text-xs font-bold uppercase">Delivery Status</p>
+                    <p className="delivery-field-value mt-1 font-semibold">{statusLabel(selectedDelivery?.status) || "-"}</p>
+                  </div>
+                  <div className="themed-modal-card rounded-xl px-4 py-3">
+                    <p className="delivery-field-label text-xs font-bold uppercase">Delivery Date</p>
+                    <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.deliveryDate || selectedDelivery?.updatedAt || "-"}</p>
+                  </div>
+                </div>
+                <div className="themed-modal-card rounded-xl px-4 py-3">
+                  <p className="delivery-field-label text-xs font-bold uppercase">Delivery Address</p>
+                  <p className="delivery-field-value mt-1 font-semibold">{selectedDelivery?.deliveryAddress || selectedDelivery?.address || "-"}</p>
+                </div>
+                <Card className="themed-modal-card">
+                  <CardBody className="gap-3">
+                    <p className="themed-modal-label text-xs font-bold uppercase">Items</p>
+                    <div className="grid gap-2">
+                      {selectedOrderItems.map((item, idx) => (
+                        <div key={`${item?.orderId || "order"}-${item?.productName || idx}`} className="themed-modal-item flex items-center justify-between gap-3 rounded-xl px-3 py-2">
+                          <span className="themed-modal-title font-semibold">{item?.productName || "-"}</span>
+                          <Chip size="sm" variant="flat">x{formatQty(item?.qty || 0)}</Chip>
+                        </div>
+                      ))}
+                    </div>
+                  </CardBody>
+                </Card>
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => setSelectedDelivery(null)}>Close</Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </motion.div>
   );
 }

@@ -180,7 +180,7 @@ const HOME_FEATURES = [
 ];
 
 const BRAND_LOGO = "/customer-app/logo.png";
-const HERO_IMAGE = "/assets/images/jazjo-store-hero.jpg";
+const HERO_IMAGE = "/assets/images/jazjo-store-hero-yH_xCp3l.jpg";
 
 const CardHeader = Card.Header;
 const CardBody = Card.Content;
@@ -3152,10 +3152,12 @@ function RegisterPage({ onNavigate, setMessage }) {
           type={showPassword ? "text" : "password"}
           value={form.password}
           onValueChange={(v) => setForm({ ...form, password: v })}
+          placeholder=""
+          description=""
+          autoComplete="new-password"
           isInvalid={Boolean(fieldErrors.password)}
           errorMessage={fieldErrors.password}
           startContent={<LockKeyhole size={18} />}
-          placeholder="At least 8 characters"
           endContent={
             <button
               type="button"
@@ -3173,6 +3175,9 @@ function RegisterPage({ onNavigate, setMessage }) {
           type={showConfirmPassword ? "text" : "password"}
           value={form.confirmPassword}
           onValueChange={(v) => setForm({ ...form, confirmPassword: v })}
+          placeholder=""
+          description=""
+          autoComplete="new-password"
           isInvalid={Boolean(fieldErrors.confirmPassword)}
           errorMessage={fieldErrors.confirmPassword}
           startContent={<LockKeyhole size={18} />}
@@ -3356,7 +3361,7 @@ function AuthCard({
           className="justify-between gap-8 p-8"
           style={{
             backgroundImage:
-              "linear-gradient(180deg, rgba(16, 185, 129, .18), rgba(15, 23, 42, .90)), url('/assets/images/jazjo-store-hero.jpg')",
+              `linear-gradient(180deg, rgba(16, 185, 129, .18), rgba(15, 23, 42, .90)), url(${HERO_IMAGE})`,
             backgroundPosition: "center",
             backgroundSize: "cover",
           }}

@@ -178,10 +178,12 @@ test("validateDeliveryAddress requires province and city selections", () => {
   assert.equal(validateDeliveryAddress({ provinceCode: "012800000", provinceName: "Ilocos Norte" }).ok, false);
 });
 
-test("validatePassword accepts long complex passwords", () => {
-  assert.equal(validatePassword("Aa12345!").ok, true);
-  assert.equal(validatePassword("StrongPass1!@#$%^&*()").ok, true);
-  assert.equal(validatePassword("password123").ok, false);
+test("validatePassword only requires a non-empty password", () => {
+  assert.equal(validatePassword("").ok, false);
+  assert.match(validatePassword("").message, /required/i);
+  assert.equal(validatePassword("a").ok, true);
+  assert.equal(validatePassword("!").ok, true);
+  assert.equal(validatePassword("password123").ok, true);
 });
 
 test("buildCheckoutPrefill maps logged-in profile fields to checkout fields", () => {

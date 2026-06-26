@@ -98,12 +98,13 @@ test("validateCustomerRegistration rejects invalid Philippine contact", () => {
   );
 });
 
-test("validatePasswordComplexity allows any length at or above 8 characters", () => {
-  assert.equal(server.validatePasswordComplexity("Aa12345!"), "Aa12345!");
-  assert.equal(server.validatePasswordComplexity("StrongPass1!@#$%^&*()"), "StrongPass1!@#$%^&*()");
+test("validatePasswordComplexity only requires a non-empty password", () => {
+  assert.equal(server.validatePasswordComplexity("a"), "a");
+  assert.equal(server.validatePasswordComplexity("!"), "!");
+  assert.equal(server.validatePasswordComplexity("password123"), "password123");
   assert.throws(
-    () => server.validatePasswordComplexity("password123"),
-    /Password must include uppercase, lowercase, number, and special character/
+    () => server.validatePasswordComplexity(""),
+    /Password is required/
   );
 });
 

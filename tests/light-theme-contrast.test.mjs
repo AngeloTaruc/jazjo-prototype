@@ -3,6 +3,9 @@ import fs from "node:fs";
 import test from "node:test";
 
 const source = fs.readFileSync("frontend/customer/src/App.jsx", "utf8");
+const adminSource = fs.readFileSync("frontend/customer/src/AdminPanel.jsx", "utf8");
+const staffSource = fs.readFileSync("frontend/customer/src/StaffPanel.jsx", "utf8");
+const stylesSource = fs.readFileSync("frontend/customer/src/styles.css", "utf8");
 
 test("shared checkout controls use theme-aware semantic colors", () => {
   assert.match(source, /text-\[var\(--text-secondary\)\]/);
@@ -25,4 +28,13 @@ test("registration surfaces use theme-aware backgrounds and text", () => {
     source,
     /<h2 className="text-lg font-black text-\[var\(--text-heading\)\]">Verify your email<\/h2>/,
   );
+});
+
+test("admin and staff panels scope light-theme readability overrides", () => {
+  assert.match(adminSource, /panel-readable flex min-h-screen/);
+  assert.match(staffSource, /panel-readable flex min-h-screen/);
+  assert.match(stylesSource, /:root:not\(\.dark\) \.panel-readable :is\(\.text-white/);
+  assert.match(stylesSource, /color: var\(--text-heading\) !important/);
+  assert.match(stylesSource, /border-color: var\(--border\) !important/);
+  assert.match(stylesSource, /background-color: var\(--bg-card-alt\) !important/);
 });

@@ -138,10 +138,7 @@ export function validateGmailAddress(email) {
 
 export function validatePassword(password) {
   const value = String(password || "");
-  if (value.length < 8) return { ok: false, message: "Password must be at least 8 characters." };
-  if (!/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9]/.test(value)) {
-    return { ok: false, message: "Password must include uppercase, lowercase, number, and special character." };
-  }
+  if (!value.trim()) return { ok: false, message: "Password is required." };
   return { ok: true, value };
 }
 
