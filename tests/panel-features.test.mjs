@@ -56,6 +56,38 @@ test("admin report rows open sales and inventory preview modals", () => {
   assert.match(adminSource, /min-w-\[760px\]/);
 });
 
+test("admin forecasting tab shows ARIMA and market basket analysis", () => {
+  assert.match(adminSource, /id: "forecasting"/);
+  assert.match(adminSource, /AdminForecastingPage/);
+  assert.match(adminSource, /ARIMA Sales Forecasting/);
+  assert.match(adminSource, /Market Basket Analysis/);
+  assert.match(adminSource, /Top Product Associations/);
+  assert.match(adminSource, /Recommendation Preview/);
+  assert.match(adminSource, /Forecast Table \(Next 3 Months\)/);
+  assert.match(adminSource, /Line graph showing actual and forecasted sales/);
+  assert.match(adminSource, /<polyline/);
+  assert.match(adminSource, /actualPoints/);
+  assert.match(adminSource, /forecastPoints/);
+  assert.match(apiSource, /apiAdminForecasting/);
+  assert.match(serverSource, /getPanelForecasting/);
+  assert.match(serverSource, /associationRules/);
+  assert.match(serverSource, /forecastMonths/);
+  assert.match(serverSource, /\/api\/panel\/admin\/forecasting/);
+});
+
+test("admin forecasting action buttons are wired to page state", () => {
+  assert.match(adminSource, /purchaseSuggestionOpen/);
+  assert.match(adminSource, /setSelectedRecommendationRule/);
+  assert.match(adminSource, /addRecommendationAction/);
+  assert.match(adminSource, /Purchase Suggestion/);
+  assert.match(adminSource, /Selected Recommendation Actions/);
+  assert.match(adminSource, /onPress=\{\(\) => setPurchaseSuggestionOpen\(true\)\}/);
+  assert.match(adminSource, /onPress=\{\(\) => setSelectedRecommendationRule\(rule\)\}/);
+  assert.match(serverSource, /purchaseSuggestions/);
+  assert.match(serverSource, /stockAction/);
+  assert.doesNotMatch(serverSource, /\.filter\(\(row\) => row\.suggestedOrderCases > 0\)/);
+});
+
 test("admin sales chart renders visible values and bar tracks", () => {
   assert.match(adminSource, /Sales Trend/);
   assert.match(adminSource, /money\(p\.sales\)/);

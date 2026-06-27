@@ -456,6 +456,10 @@ export async function apiAdminReports() {
   return request("/api/panel/admin/reports");
 }
 
+export async function apiAdminForecasting() {
+  return request("/api/panel/admin/forecasting");
+}
+
 export async function apiAdminReportDetail(reportKey, { range = "all", from = "", to = "" } = {}) {
   const params = new URLSearchParams({ range });
   if (from) params.set("from", from);

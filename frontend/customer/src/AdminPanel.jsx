@@ -43,6 +43,7 @@ import {
   apiAdminRewards,
   apiAdminSales,
   apiAdminReports,
+  apiAdminForecasting,
   apiAdminDelivery,
   apiAdminStaffAccounts,
   apiAdminCreateStaffAccount,
@@ -476,6 +477,7 @@ export default function AdminPanel({ isDark, onToggleTheme }) {
     { id: "dashboard", label: "Dashboard", icon: <Home size={18} /> },
     { id: "sales", label: "Sales", icon: <TrendingUp size={18} /> },
     { id: "inventory", label: "Inventory", icon: <Warehouse size={18} /> },
+    { id: "forecasting", label: "Forecasting", icon: <BarChart3 size={18} /> },
     { id: "orders", label: "Orders", icon: <Package size={18} /> },
     { id: "delivery", label: "Delivery", icon: <Truck size={18} /> },
     { id: "customers", label: "Customers", icon: <Users size={18} /> },
@@ -562,6 +564,7 @@ export default function AdminPanel({ isDark, onToggleTheme }) {
               {route === "dashboard" && <AdminDashboardPage setMessage={setMessage} />}
               {route === "sales" && <AdminSalesPage setMessage={setMessage} />}
               {route === "inventory" && <AdminInventoryPage setMessage={setMessage} />}
+              {route === "forecasting" && <AdminForecastingPage setMessage={setMessage} />}
               {route === "orders" && <AdminOrdersPage setMessage={setMessage} />}
               {route === "delivery" && <AdminDeliveryPage setMessage={setMessage} />}
               {route === "customers" && <AdminCustomersPage setMessage={setMessage} />}
@@ -2499,6 +2502,402 @@ function AdminRewardsPage({ setMessage }) {
             <Button color="success" onPress={doRedeem}>Redeem</Button>
           </Modal.Footer>
         </Modal.Dialog>
+      </Modal>
+    </motion.div>
+  );
+}
+
+function AdminForecastingPage({ setMessage }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [purchaseSuggestionOpen, setPurchaseSuggestionOpen] = useState(false);
+  const [selectedRecommendationRule, setSelectedRecommendationRule] = useState(null);
+  const [selectedRecommendationActions, setSelectedRecommendationActions] = useState([]);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setData(await apiAdminForecasting());
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [setMessage]);
+  useEffect(() => { load(); }, [load]);
+
+  const kpis = data?.kpis || {};
+  const actualRows = data?.salesSeries || [];
+  const forecastRows = data?.forecastMonths || [];
+  const chartRows = [
+    ...actualRows.map((row) => ({ ...row, type: "actual", value: Number(row.sales || 0), label: row.month })),
+    ...forecastRows.map((row) => ({ ...row, type: "forecast", value: Number(row.forecastedSales || 0), label: row.month }))
+  ];
+  const maxChartValue = Math.max(1, ...chartRows.map((row) => Number(row.value || 0)));
+  const chartWidth = 760;
+  const chartHeight = 260;
+  const chartPadX = 42;
+  const chartPadTop = 24;
+  const chartPadBottom = 60;
+  const plotWidth = chartWidth - chartPadX * 2;
+  const plotHeight = chartHeight - chartPadTop - chartPadBottom;
+  const toChartX = (index) => chartRows.length <= 1
+    ? chartPadX + plotWidth / 2
+    : chartPadX + (index / (chartRows.length - 1)) * plotWidth;
+  const toChartY = (value) => chartPadTop + plotHeight - (Number(value || 0) / maxChartValue) * plotHeight;
+  const chartPointRows = chartRows.map((row, index) => ({
+    ...row,
+    x: toChartX(index),
+    y: toChartY(row.value)
+  }));
+  const actualPoints = chartPointRows
+    .filter((row) => row.type === "actual")
+    .map((row) => `${row.x},${row.y}`)
+    .join(" ");
+  const forecastPoints = chartPointRows
+    .filter((row, index) => row.type === "forecast" || (row.type === "actual" && chartPointRows[index + 1]?.type === "forecast"))
+    .map((row) => `${row.x},${row.y}`)
+    .join(" ");
+  const modelSummary = data?.modelSummary || {};
+  const recommendation = useMemo(() => {
+    if (!selectedRecommendationRule) return data?.recommendationPreview;
+    return {
+      source: {
+        name: selectedRecommendationRule.ifCustomerBuys,
+        image: selectedRecommendationRule.sourceImage,
+        price: selectedRecommendationRule.sourcePrice
+      },
+      recommendations: [{
+        name: selectedRecommendationRule.thenAlsoBuys,
+        image: selectedRecommendationRule.targetImage,
+        price: selectedRecommendationRule.targetPrice,
+        confidence: selectedRecommendationRule.confidence
+      }]
+    };
+  }, [data, selectedRecommendationRule]);
+  const addRecommendationAction = (item) => {
+    const sourceName = recommendation?.source?.name || "Selected product";
+    const action = {
+      id: `${sourceName}-${item.name}`,
+      sourceName,
+      targetName: item.name,
+      confidence: item.confidence
+    };
+    setSelectedRecommendationActions((current) => {
+      if (current.some((entry) => entry.id === action.id)) return current;
+      return [...current, action];
+    });
+    setMessage(`${item.name} added as a recommendation for ${sourceName}.`);
+  };
+
+  if (loading) {
+    return (
+      <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+        <div className="grid gap-4 lg:grid-cols-2">
+          {[1, 2].map((col) => (
+            <Card key={col}>
+              <CardBody className="gap-4">
+                <Skeleton className="h-8 w-56" />
+                <div className="grid gap-3 md:grid-cols-3">
+                  {[1, 2, 3].map((item) => <Skeleton key={item} className="h-24 w-full" />)}
+                </div>
+                <Skeleton className="h-72 w-full" />
+              </CardBody>
+            </Card>
+          ))}
+        </div>
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div className="space-y-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="grid gap-5 xl:grid-cols-2">
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-black">ARIMA Sales Forecasting</h2>
+              <p className="text-sm text-slate-400">Predict future beverage demand using an ARIMA-style trend model.</p>
+            </div>
+            <Chip variant="flat" color="default">Latest sales history</Chip>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <Card>
+              <CardBody className="gap-2">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-11 w-11 place-items-center rounded-full bg-emerald-500/15 text-emerald-300"><TrendingUp size={22} /></div>
+                  <div>
+                    <p className="text-xs font-bold uppercase text-slate-500">Total Sales (Actual)</p>
+                    <p className="text-lg font-black">{money(kpis.totalSalesActual || 0)}</p>
+                  </div>
+                </div>
+                <p className="text-xs font-semibold text-emerald-300">{Number(kpis.salesGrowth || 0) >= 0 ? "+" : ""}{kpis.salesGrowth || 0}% vs previous period</p>
+              </CardBody>
+            </Card>
+            <Card>
+              <CardBody className="gap-2">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-11 w-11 place-items-center rounded-full bg-blue-500/15 text-blue-300"><BarChart3 size={22} /></div>
+                  <div>
+                    <p className="text-xs font-bold uppercase text-slate-500">Forecast (Next 30 Days)</p>
+                    <p className="text-lg font-black">{money(kpis.forecastNext30Days || 0)}</p>
+                  </div>
+                </div>
+                <p className="text-xs font-semibold text-emerald-300">{Number(kpis.forecastGrowth || 0) >= 0 ? "+" : ""}{kpis.forecastGrowth || 0}% projected</p>
+              </CardBody>
+            </Card>
+            <Card>
+              <CardBody className="gap-2">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-11 w-11 place-items-center rounded-full bg-amber-500/15 text-amber-300"><Sparkles size={22} /></div>
+                  <div>
+                    <p className="text-xs font-bold uppercase text-slate-500">Forecast Accuracy (MAPE)</p>
+                    <p className="text-lg font-black">{kpis.forecastAccuracyMape || 0}%</p>
+                  </div>
+                </div>
+                <p className="text-xs font-semibold text-emerald-300">Good Accuracy</p>
+              </CardBody>
+            </Card>
+          </div>
+          <Card>
+            <CardHeader><h3 className="font-black">Sales Forecast (ARIMA Model)</h3></CardHeader>
+            <CardBody>
+              <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-center gap-4 text-xs font-semibold text-slate-400">
+                  <span className="inline-flex items-center gap-2"><span className="h-2 w-6 rounded-full bg-emerald-400" /> Actual Sales</span>
+                  <span className="inline-flex items-center gap-2"><span className="h-2 w-6 rounded-full bg-blue-400" /> Forecasted Sales</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <svg
+                    className="min-w-[760px]"
+                    viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+                    role="img"
+                    aria-label="Line graph showing actual and forecasted sales"
+                  >
+                    {[0.25, 0.5, 0.75, 1].map((tick) => {
+                      const y = chartPadTop + plotHeight - tick * plotHeight;
+                      return (
+                        <g key={tick}>
+                          <line x1={chartPadX} x2={chartWidth - chartPadX} y1={y} y2={y} stroke="rgba(148,163,184,.16)" strokeDasharray="4 7" />
+                          <text x={chartPadX - 10} y={y + 4} textAnchor="end" className="fill-slate-500 text-[10px] font-bold">{money(maxChartValue * tick)}</text>
+                        </g>
+                      );
+                    })}
+                    <line x1={chartPadX} x2={chartWidth - chartPadX} y1={chartPadTop + plotHeight} y2={chartPadTop + plotHeight} stroke="rgba(148,163,184,.28)" />
+                    {actualPoints ? (
+                      <polyline points={actualPoints} fill="none" stroke="#34d399" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+                    ) : null}
+                    {forecastPoints ? (
+                      <polyline points={forecastPoints} fill="none" stroke="#60a5fa" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+                    ) : null}
+                    {chartPointRows.map((row, index) => (
+                      <g key={`${row.type}-${row.label}-${index}`}>
+                        <line x1={row.x} x2={row.x} y1={chartPadTop + plotHeight} y2={chartPadTop + plotHeight + 5} stroke="rgba(148,163,184,.35)" />
+                        <circle cx={row.x} cy={row.y} r="6" fill={row.type === "actual" ? "#34d399" : "#60a5fa"} stroke="#020617" strokeWidth="3" />
+                        <text x={row.x} y={Math.max(13, row.y - 12)} textAnchor="middle" className="fill-slate-200 text-[11px] font-black">{money(row.value)}</text>
+                        <text x={row.x} y={chartPadTop + plotHeight + 24} textAnchor="middle" className="fill-slate-500 text-[10px] font-semibold">{row.label}</text>
+                      </g>
+                    ))}
+                  </svg>
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+          <Card>
+            <CardHeader><h3 className="font-black">Forecast Table (Next 3 Months)</h3></CardHeader>
+            <CardBody>
+              <div className="overflow-x-auto">
+                <Table>
+                  <THead><Th>MONTH</Th><Th>FORECASTED SALES</Th><Th>LOWER CONFIDENCE</Th><Th>UPPER CONFIDENCE</Th><Th>EXPECTED GROWTH</Th></THead>
+                  <TBody>
+                    {forecastRows.map((row) => (
+                      <Tr key={row.key || row.month}>
+                        <Td className="font-semibold">{row.month}</Td>
+                        <Td>{money(row.forecastedSales)}</Td>
+                        <Td>{money(row.lowerConfidence)}</Td>
+                        <Td>{money(row.upperConfidence)}</Td>
+                        <Td><Chip color={Number(row.expectedGrowth || 0) >= 0 ? "success" : "warning"} variant="flat" size="sm">{row.expectedGrowth}%</Chip></Td>
+                      </Tr>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
+            </CardBody>
+          </Card>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader><h3 className="font-black">Model Summary</h3></CardHeader>
+              <CardBody>
+                <Table>
+                  <TBody>
+                    <Tr><Td>Model Used</Td><Td className="font-semibold">{modelSummary.modelUsed || "ARIMA (1,1,1)"}</Td></Tr>
+                    <Tr><Td>MAPE</Td><Td className="font-semibold">{modelSummary.mape || 0}%</Td></Tr>
+                    <Tr><Td>RMSE</Td><Td className="font-semibold">{money(modelSummary.rmse || 0)}</Td></Tr>
+                    <Tr><Td>Data Used</Td><Td className="font-semibold">{modelSummary.dataUsed || "-"}</Td></Tr>
+                    <Tr><Td>Confidence Level</Td><Td className="font-semibold">{modelSummary.confidenceLevel || "95%"}</Td></Tr>
+                  </TBody>
+                </Table>
+              </CardBody>
+            </Card>
+            <Card>
+              <CardHeader><h3 className="font-black">Inventory Recommendation</h3></CardHeader>
+              <CardBody className="gap-3">
+                <p className="text-sm text-slate-400">Based on the forecast, you may need additional stock for the next 30 days.</p>
+                <Table>
+                  <TBody>
+                    <Tr><Td>Current Stock Value</Td><Td className="font-semibold">{money(data?.inventoryRecommendation?.currentStockValue || 0)}</Td></Tr>
+                    <Tr><Td>Forecasted Demand</Td><Td className="font-semibold">{money(data?.inventoryRecommendation?.forecastedDemand || 0)}</Td></Tr>
+                    <Tr><Td>Recommended Stock Value</Td><Td className="font-black text-emerald-300">{money(data?.inventoryRecommendation?.recommendedStockValue || 0)}</Td></Tr>
+                  </TBody>
+                </Table>
+                <Button color="success" className="font-bold" onPress={() => setPurchaseSuggestionOpen(true)}>Generate Purchase Suggestion</Button>
+              </CardBody>
+            </Card>
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <div>
+            <h2 className="text-2xl font-black">Market Basket Analysis</h2>
+            <p className="text-sm text-slate-400">Discover products commonly bought together.</p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-4">
+            <Card><CardBody><p className="text-xs font-bold uppercase text-slate-500">Total Transactions</p><p className="text-xl font-black">{formatQty(kpis.totalTransactions || 0)}</p></CardBody></Card>
+            <Card><CardBody><p className="text-xs font-bold uppercase text-slate-500">Unique Products</p><p className="text-xl font-black">{formatQty(kpis.uniqueProducts || 0)}</p></CardBody></Card>
+            <Card><CardBody><p className="text-xs font-bold uppercase text-slate-500">Association Rules</p><p className="text-xl font-black">{formatQty(kpis.associationRules || 0)}</p></CardBody></Card>
+            <Card><CardBody><p className="text-xs font-bold uppercase text-slate-500">Analysis Type</p><p className="text-sm font-black">{kpis.analysisType || "Apriori Algorithm"}</p><p className="text-xs text-slate-500">Min. Support: 2%</p></CardBody></Card>
+          </div>
+          <Card>
+            <CardHeader><h3 className="font-black">Top Product Associations</h3></CardHeader>
+            <CardBody>
+              <div className="overflow-x-auto">
+                <Table>
+                  <THead><Th>#</Th><Th>IF CUSTOMER BUYS</Th><Th>THEN ALSO BUYS</Th><Th>SUPPORT</Th><Th>CONFIDENCE</Th><Th>LIFT</Th><Th>ACTION</Th></THead>
+                  <TBody>
+                    {(data?.associationRules || []).slice(0, 5).map((rule, idx) => (
+                      <Tr key={`${rule.ifCustomerBuys}-${rule.thenAlsoBuys}`}>
+                        <Td>{idx + 1}</Td>
+                        <Td><div className="flex items-center gap-2">{rule.sourceImage ? <img alt="" className="h-9 w-9 rounded bg-white object-contain" src={rule.sourceImage} /> : null}<span className="font-semibold">{rule.ifCustomerBuys}</span></div></Td>
+                        <Td><div className="flex items-center gap-2">{rule.targetImage ? <img alt="" className="h-9 w-9 rounded bg-white object-contain" src={rule.targetImage} /> : null}<span className="font-semibold">{rule.thenAlsoBuys}</span></div></Td>
+                        <Td>{rule.support}%</Td>
+                        <Td>{rule.confidence}%</Td>
+                        <Td>{rule.lift}</Td>
+                        <Td><Button size="sm" variant="flat" color="success" onPress={() => setSelectedRecommendationRule(rule)}>Use for Recommendation</Button></Td>
+                      </Tr>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
+            </CardBody>
+          </Card>
+          <Card>
+            <CardHeader><h3 className="font-black">Recommendation Preview</h3></CardHeader>
+            <CardBody>
+              {recommendation?.source ? (
+                <div className="grid gap-4 lg:grid-cols-[180px_1fr]">
+                  <div className="rounded-2xl border border-white/10 bg-white/[.03] p-4 text-center">
+                    <p className="text-xs font-bold text-slate-500">Customer adds to cart:</p>
+                    {recommendation.source.image ? <img alt="" className="mx-auto mt-3 h-28 w-28 rounded-xl bg-white object-contain p-2" src={recommendation.source.image} /> : null}
+                    <p className="mt-3 font-black">{recommendation.source.name}</p>
+                    <p className="text-xs text-slate-400">{money(recommendation.source.price)} / case</p>
+                  </div>
+                  <div>
+                    <p className="mb-3 text-sm font-black text-emerald-300">You may also like:</p>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {(recommendation.recommendations || []).map((item) => (
+                        <div key={item.name} className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                          {item.image ? <img alt="" className="mx-auto h-24 w-full rounded-xl bg-white object-contain p-2" src={item.image} /> : null}
+                          <p className="mt-3 font-black">{item.name}</p>
+                          <p className="text-xs text-slate-400">{money(item.price)} / case</p>
+                          <p className="text-xs text-slate-500">({item.confidence}% buy together)</p>
+                          <Button size="sm" color="success" className="mt-3" onPress={() => addRecommendationAction(item)}>+ Add</Button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-400">No product combinations yet. More multi-item orders will improve recommendations.</p>
+              )}
+            </CardBody>
+          </Card>
+          <Card>
+            <CardHeader><h3 className="font-black">Top Product Combinations Summary</h3></CardHeader>
+            <CardBody>
+              <div className="flex h-56 items-end gap-3 overflow-x-auto rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                {(data?.combinationSummary || []).map((row) => (
+                  <div key={row.combination} className="flex min-w-24 flex-col items-center gap-2">
+                    <div className="w-10 rounded-t-xl bg-emerald-400" style={{ height: `${Math.max(10, Number(row.support || 0) * 6)}px` }} />
+                    <p className="text-xs font-bold text-emerald-300">{row.support}%</p>
+                    <p className="w-24 truncate text-center text-[11px] text-slate-500">{row.combination}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 rounded-xl bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">Use these insights to create bundles, promotions, and product recommendations to increase sales.</p>
+            </CardBody>
+          </Card>
+          {selectedRecommendationActions.length ? (
+            <Card>
+              <CardHeader><h3 className="font-black">Selected Recommendation Actions</h3></CardHeader>
+              <CardBody className="gap-3">
+                {selectedRecommendationActions.map((action) => (
+                  <div key={action.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2">
+                    <span className="text-sm"><span className="font-bold">{action.sourceName}</span> recommends <span className="font-bold text-emerald-300">{action.targetName}</span></span>
+                    <Chip color="success" variant="flat" size="sm">{action.confidence}% confidence</Chip>
+                  </div>
+                ))}
+              </CardBody>
+            </Card>
+          ) : null}
+        </section>
+      </div>
+      <Modal isOpen={purchaseSuggestionOpen} onOpenChange={() => setPurchaseSuggestionOpen(false)}>
+        <Modal.Backdrop>
+          <Modal.Container size="3xl">
+            <Modal.Dialog>
+              <Modal.Header>
+                <div>
+                  <p className="text-xs font-bold uppercase text-emerald-300">Forecasting</p>
+                  <h2 className="text-lg font-black text-white">Purchase Suggestion</h2>
+                </div>
+              </Modal.Header>
+              <Modal.Body>
+                {(data?.purchaseSuggestions || []).length ? (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <THead><Th>PRODUCT</Th><Th>CURRENT STOCK</Th><Th>FORECAST CASES</Th><Th>SUGGESTED ORDER</Th><Th>ESTIMATED COST</Th><Th>ACTION</Th></THead>
+                      <TBody>
+                        {(data?.purchaseSuggestions || []).map((item) => {
+                          const needsOrder = Number(item.suggestedOrderCases || 0) > 0;
+                          return (
+                            <Tr key={item.productName}>
+                              <Td>
+                                <div className="flex items-center gap-2">
+                                  {item.imageUrl ? <img alt="" className="h-9 w-9 rounded bg-white object-contain" src={item.imageUrl} /> : null}
+                                  <span className="font-semibold">{item.productName}</span>
+                                </div>
+                              </Td>
+                              <Td>{formatQty(item.currentStock)} cases</Td>
+                              <Td>{formatQty(item.forecastCases)} cases</Td>
+                              <Td><Chip color={needsOrder ? "warning" : "success"} variant="flat" size="sm">{formatQty(item.suggestedOrderCases)} cases</Chip></Td>
+                              <Td>{money(item.estimatedCost || 0)}</Td>
+                              <Td><Chip color={needsOrder ? "warning" : "success"} variant="flat" size="sm">{item.stockAction || (needsOrder ? "Order Stock" : "Maintain Stock")}</Chip></Td>
+                            </Tr>
+                          );
+                        })}
+                      </TBody>
+                    </Table>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-400">No purchase guidance is available yet. Add more completed orders to improve the forecast.</p>
+                )}
+              </Modal.Body>
+              <Modal.Footer>
+                <Button variant="flat" onPress={() => setPurchaseSuggestionOpen(false)}>Close</Button>
+                <Button color="success" onPress={() => { setPurchaseSuggestionOpen(false); setMessage("Purchase suggestion reviewed."); }}>Mark Reviewed</Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
       </Modal>
     </motion.div>
   );
