@@ -16,6 +16,7 @@ import {
   normalizeCategory,
   paymentStatusLabel,
   partitionProductsByFavorites,
+  recommendRelatedProducts,
   getRegistrationFieldState,
   statusLabel,
   toggleFavoriteProduct,
@@ -73,6 +74,23 @@ test("partitionProductsByFavorites separates saved products without changing ord
   assert.deepEqual(result.favoriteProducts.map((product) => product.id), ["p2", "p3"]);
   assert.deepEqual(result.otherProducts.map((product) => product.id), ["p1", "p4"]);
   assert.deepEqual(products.map((product) => product.id), ["p1", "p2", "p3", "p4"]);
+});
+
+test("recommendRelatedProducts prefers same-category in-stock products and caps results", () => {
+  const products = [
+    { id: "cola", name: "Cola", category: "Soft Drinks", stockCases: 10 },
+    { id: "royal", name: "Royal", category: "Soft Drinks", stockCases: 8 },
+    { id: "sprite", name: "Sprite", category: "Soft Drinks", stockCases: 6 },
+    { id: "pepsi", name: "Pepsi", category: "Soft Drinks", stockCases: 5 },
+    { id: "water", name: "Water", category: "Water", stockCases: 9 },
+    { id: "juice", name: "Juice", category: "Juice", stockCases: 7 },
+    { id: "energy", name: "Energy", category: "Energy Drinks", stockCases: 4 },
+    { id: "zero", name: "Zero Stock", category: "Soft Drinks", stockCases: 0 },
+  ];
+
+  const result = recommendRelatedProducts(products, products[0], { limit: 5 });
+
+  assert.deepEqual(result.map((product) => product.id), ["royal", "sprite", "pepsi", "water", "juice"]);
 });
 
 test("calculateDeliveryFee uses configurable fee and free-delivery minimum", () => {

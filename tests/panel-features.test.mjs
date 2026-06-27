@@ -4,10 +4,14 @@ import test from "node:test";
 
 const staffSource = fs.readFileSync("frontend/customer/src/StaffPanel.jsx", "utf8");
 const adminSource = fs.readFileSync("frontend/customer/src/AdminPanel.jsx", "utf8");
+const appSource = fs.readFileSync("frontend/customer/src/App.jsx", "utf8");
 const apiSource = fs.readFileSync("frontend/customer/src/lib/api.js", "utf8");
 const serverSource = fs.readFileSync("server/index.mjs", "utf8");
 const staffMigrationSource = fs.existsSync("sql/2026-06-26_staff_accounts.sql")
   ? fs.readFileSync("sql/2026-06-26_staff_accounts.sql", "utf8")
+  : "";
+const invoicePrintSource = fs.existsSync("frontend/customer/src/lib/invoicePrint.js")
+  ? fs.readFileSync("frontend/customer/src/lib/invoicePrint.js", "utf8")
   : "";
 
 test("staff orders expose full order editing", () => {
@@ -34,6 +38,22 @@ test("admin report export buttons have PDF and Excel actions", () => {
   assert.match(adminSource, /iframe\.srcdoc = buildPrintableReportHtml\(\)/);
   assert.doesNotMatch(adminSource, /window\.open\("", "_blank", "noopener,noreferrer"\)/);
   assert.match(adminSource, /download = `jazjo-reports-/);
+});
+
+test("admin report rows open sales and inventory preview modals", () => {
+  assert.match(adminSource, /SalesReportPreview/);
+  assert.match(adminSource, /InventoryReductionSummary/);
+  assert.match(adminSource, /SALES OVERVIEW/);
+  assert.match(adminSource, /SALES SUMMARY TABLE/);
+  assert.match(adminSource, /INVENTORY REDUCTION SUMMARY/);
+  assert.match(adminSource, /selectedReport\?\.key === "sales"/);
+  assert.match(adminSource, /selectedReport\?\.key === "inventory"/);
+  assert.match(serverSource, /inventorySummary/);
+  assert.match(serverSource, /totalReductionValue/);
+  assert.match(serverSource, /salesReductionByProduct/);
+  assert.match(serverSource, /reductionSource/);
+  assert.match(adminSource, /max-h-\[72vh\]/);
+  assert.match(adminSource, /min-w-\[760px\]/);
 });
 
 test("admin sales chart renders visible values and bar tracks", () => {
@@ -106,6 +126,24 @@ test("admin manages staff accounts from an admin-only page", () => {
   assert.match(serverSource, /assertProfileIsActive/);
 
   assert.match(staffMigrationSource, /add column if not exists is_active/);
+});
+
+test("sales invoice printing is shared across panel and customer surfaces", () => {
+  assert.match(invoicePrintSource, /export function buildInvoiceHtml/);
+  assert.match(invoicePrintSource, /export function openPrintableHtml/);
+  assert.match(adminSource, /from "\.\/lib\/invoicePrint\.js"/);
+  assert.doesNotMatch(adminSource, /function buildInvoiceHtml/);
+  assert.match(apiSource, /apiOrderInvoice/);
+  assert.match(serverSource, /\/api\/orders\/"\)\s*&& url\.pathname\.endsWith\("\/invoice"\)/);
+});
+
+test("customer and staff orders expose sales invoice printing", () => {
+  assert.match(appSource, /apiOrderInvoice/);
+  assert.match(appSource, /openSalesInvoice/);
+  assert.match(appSource, /Sales Invoice/);
+  assert.match(staffSource, /apiOrderInvoice/);
+  assert.match(staffSource, /openSalesInvoice/);
+  assert.match(staffSource, /Sales Invoice/);
 });
 
 test("staff account editor uses readable inputs and centered reset modal", () => {

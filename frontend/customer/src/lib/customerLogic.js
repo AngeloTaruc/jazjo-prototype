@@ -387,6 +387,24 @@ export function partitionProductsByFavorites(products = [], favorites = []) {
   );
 }
 
+export function recommendRelatedProducts(products = [], anchorProduct, { limit = 5 } = {}) {
+  const anchorId = String(anchorProduct?.id || "");
+  const anchorCategory = String(anchorProduct?.category || "").trim().toLowerCase();
+  const available = (products || []).filter((product) => {
+    if (!product) return false;
+    if (String(product.id || "") === anchorId) return false;
+    return Number(product.stockCases || 0) > 0;
+  });
+  const sameCategory = [];
+  const fallback = [];
+  for (const product of available) {
+    const productCategory = String(product.category || "").trim().toLowerCase();
+    if (anchorCategory && productCategory === anchorCategory) sameCategory.push(product);
+    else fallback.push(product);
+  }
+  return [...sameCategory, ...fallback].slice(0, Math.max(0, Number(limit) || 0));
+}
+
 export function formatQty(value) {
   const num = Number(value || 0);
   return Number.isInteger(num) ? String(num) : num.toFixed(2).replace(/\.?0+$/, "");

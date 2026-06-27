@@ -35,6 +35,8 @@ import {
   Moon,
   Package,
   Phone,
+  Plus,
+  Printer,
   Search,
   ShieldCheck,
   ShoppingCart,
@@ -53,6 +55,7 @@ import {
   apiCreateOrder,
   apiLogin,
   apiOrderDetails,
+  apiOrderInvoice,
   apiOrders,
   apiProducts,
   apiProfile,
@@ -90,6 +93,7 @@ import {
   readStorage,
   saveSession,
   partitionProductsByFavorites,
+  recommendRelatedProducts,
   statusLabel,
   toggleFavoriteProduct,
   validateContact,
@@ -98,6 +102,7 @@ import {
   validatePassword,
   writeStorage,
 } from "./lib/customerLogic.js";
+import { buildInvoiceHtml, openPrintableHtml } from "./lib/invoicePrint.js";
 
 const CATEGORY_OPTIONS = ["Soft Drinks", "Water", "Energy Drinks", "Juice"];
 const PACK_OPTIONS = [
@@ -847,6 +852,7 @@ export default function App() {
                     deliverySettings={deliverySettings}
                     refreshOrders={refreshOrders}
                     setMessage={setMessage}
+                    onAdd={addToCart}
                   />
                 )}
                 {route === "orders" && (
@@ -861,6 +867,7 @@ export default function App() {
                   <OrderDetailsPage
                     id={route.replace("order/", "")}
                     onNavigate={navigate}
+                    setMessage={setMessage}
                   />
                 )}
                 {route === "rewards" && <RewardsPage setMessage={setMessage} />}
@@ -1489,6 +1496,42 @@ function ProductCard({
   );
 }
 
+function RecommendationCard({ product, onAdd }) {
+  const out = Number(product.stockCases || 0) <= 0;
+  return (
+    <Card className="h-full border border-white/10 bg-slate-950/75 shadow-lg shadow-black/20">
+      <CardBody className="grid min-h-[124px] grid-cols-[64px_1fr] items-center gap-3 p-3">
+        <div className="grid h-16 w-16 place-items-center overflow-hidden rounded-xl border border-white/10 bg-white p-2">
+          <Image
+            alt={product.name}
+            className="h-full w-full object-contain"
+            src={product.img}
+          />
+        </div>
+        <div className="flex min-w-0 flex-col justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className="line-clamp-2 text-xs font-black leading-snug text-white">{product.name}</h3>
+            <p className="mt-1 text-xs font-semibold text-emerald-300">
+              {money(product.price)} / case
+            </p>
+            <p className="truncate text-[11px] text-slate-500">{product.category}</p>
+          </div>
+          <Button
+            color="success"
+            size="sm"
+            className="min-h-8 w-fit px-3"
+            isDisabled={out}
+            onPress={() => onAdd(product, PACK_OPTIONS[0])}
+          >
+            <Plus size={14} />
+            Add
+          </Button>
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
 function ShopPage({
   products,
   loading,
@@ -1778,7 +1821,7 @@ function Dashboard({
   );
 }
 
-function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, setMessage }) {
+function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, setMessage, onAdd }) {
   const [form, setForm] = useState({
     customerName: "",
     email: "",
@@ -1822,6 +1865,12 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
   const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0);
   const deliveryFee = form.fulfillmentType === "pickup" ? 0 : calculateDeliveryFee(subtotal, deliverySettings);
   const total = subtotal + deliveryFee;
+  const recommendationAnchor = lines.at(-1)?.product || lines[0]?.product || null;
+  const recommendations = useMemo(() => {
+    const cartProductIds = new Set(lines.map((line) => String(line.product.id)));
+    return recommendRelatedProducts(products, recommendationAnchor, { limit: 5 })
+      .filter((product) => !cartProductIds.has(String(product.id)));
+  }, [products, recommendationAnchor, lines]);
 
   const updateQty = (line, delta) => {
     const nextQty = Number(line.qty || 0) + delta;
@@ -1927,7 +1976,7 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
 
   return (
     <motion.section
-      className="grid gap-5 lg:grid-cols-[1.2fr_.8fr]"
+      className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(420px,460px)]"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
@@ -2016,6 +2065,26 @@ function CartPage({ products, cart, setCart, deliverySettings, refreshOrders, se
               </Card>
             </motion.div>
           ))}
+          {recommendations.length > 0 ? (
+            <section className="mt-2 space-y-4 rounded-2xl border border-emerald-400/20 bg-emerald-400/[.06] p-4" aria-labelledby="cart-recommendation-products-title">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase text-emerald-300">Checkout picks</p>
+                  <h2 id="cart-recommendation-products-title" className="text-xl font-black text-white">
+                    You may also like
+                  </h2>
+                </div>
+                <Chip color="success" variant="flat" size="sm">
+                  Based on your cart
+                </Chip>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {recommendations.map((product) => (
+                  <RecommendationCard key={product.id} product={product} onAdd={onAdd} />
+                ))}
+              </div>
+            </section>
+          ) : null}
         </CardBody>
       </Card>
       <Card>
@@ -2205,6 +2274,7 @@ function OrdersPage({ orders, refreshOrders, onNavigate, setMessage }) {
   const [error, setError] = useState("");
   const [checkingPayment, setCheckingPayment] = useState("");
   const [repayingOrder, setRepayingOrder] = useState("");
+  const [loadingInvoice, setLoadingInvoice] = useState("");
   useEffect(() => {
     setLoading(true);
     refreshOrders()
@@ -2249,6 +2319,18 @@ function OrdersPage({ orders, refreshOrders, onNavigate, setMessage }) {
       setMessage?.(err.message || "Unable to start payment again.");
     } finally {
       setRepayingOrder("");
+    }
+  };
+  const openSalesInvoice = async (order) => {
+    if (!order?.id) return;
+    setLoadingInvoice(order.id);
+    try {
+      const invoice = await apiOrderInvoice(order.id);
+      openPrintableHtml(buildInvoiceHtml(invoice));
+    } catch (err) {
+      setMessage?.(err.message || "Unable to prepare sales invoice.");
+    } finally {
+      setLoadingInvoice("");
     }
   };
   const statuses = [
@@ -2370,6 +2452,14 @@ function OrdersPage({ orders, refreshOrders, onNavigate, setMessage }) {
               <strong className="text-xl text-white">
                 {money(latestOrder.total)}
               </strong>
+              <Button
+                variant="flat"
+                isDisabled={loadingInvoice === latestOrder.id}
+                onPress={() => openSalesInvoice(latestOrder)}
+              >
+                <Printer size={16} />
+                {loadingInvoice === latestOrder.id ? "Preparing..." : "Sales Invoice"}
+              </Button>
               {isPendingPaymentOrder(latestOrder) ? (
                 <>
                   {canRepayOrder(latestOrder) ? (
@@ -2446,8 +2536,10 @@ function OrdersPage({ orders, refreshOrders, onNavigate, setMessage }) {
             onNavigate={onNavigate}
             onCheckPayment={checkPayment}
             onRepay={repayOrder}
+            onPrintInvoice={openSalesInvoice}
             isCheckingPayment={checkingPayment === order.id}
             isRepaying={repayingOrder === order.id}
+            isPrintingInvoice={loadingInvoice === order.id}
           />
         ))}
         {!loading && filtered.length === 0 ? (
@@ -2471,9 +2563,10 @@ function OrdersPage({ orders, refreshOrders, onNavigate, setMessage }) {
   );
 }
 
-function OrderDetailsPage({ id, onNavigate }) {
+function OrderDetailsPage({ id, onNavigate, setMessage }) {
   const [order, setOrder] = useState(null);
   const [error, setError] = useState("");
+  const [loadingInvoice, setLoadingInvoice] = useState(false);
   useEffect(() => {
     apiOrderDetails(id)
       .then(setOrder)
@@ -2512,6 +2605,17 @@ function OrderDetailsPage({ id, onNavigate }) {
     );
   const label = statusLabel(order.status);
   const isPickupOrder = String(order.fulfillmentType || "").toLowerCase() === "pickup";
+  const openSalesInvoice = async () => {
+    setLoadingInvoice(true);
+    try {
+      const invoice = await apiOrderInvoice(order.id);
+      openPrintableHtml(buildInvoiceHtml(invoice));
+    } catch (err) {
+      setMessage?.(err.message || "Unable to prepare sales invoice.");
+    } finally {
+      setLoadingInvoice(false);
+    }
+  };
   return (
     <motion.section
       className="space-y-5"
@@ -2547,6 +2651,15 @@ function OrderDetailsPage({ id, onNavigate }) {
             <FulfillmentChip value={order.fulfillmentType} />
             <PaymentMethodChip method={order.paymentMethod} />
             <PaymentStatusChip order={order} />
+            <Button
+              size="sm"
+              variant="flat"
+              isDisabled={loadingInvoice}
+              onPress={openSalesInvoice}
+            >
+              <Printer size={14} />
+              {loadingInvoice ? "Preparing..." : "Sales Invoice"}
+            </Button>
           </div>
         </CardHeader>
         <CardBody className="gap-5 p-6">
@@ -3746,8 +3859,10 @@ function OrderListCard({
   onNavigate,
   onCheckPayment,
   onRepay,
+  onPrintInvoice,
   isCheckingPayment,
   isRepaying,
+  isPrintingInvoice,
 }) {
   const label = statusLabel(order.status);
   const itemSummary =
@@ -3786,6 +3901,17 @@ function OrderListCard({
               <strong className="min-w-24 text-white">
                 {money(order.total)}
               </strong>
+              <Tooltip content="Print sales invoice" placement="top" showArrow>
+                <Button
+                  variant="flat"
+                  size="sm"
+                  isDisabled={isPrintingInvoice}
+                  onPress={() => onPrintInvoice?.(order)}
+                >
+                  <Printer size={14} />
+                  {isPrintingInvoice ? "Preparing..." : "Sales Invoice"}
+                </Button>
+              </Tooltip>
               {isPendingPaymentOrder(order) ? (
                 <>
                   {canRepayOrder(order) ? (

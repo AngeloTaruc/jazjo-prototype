@@ -75,7 +75,6 @@ import {
   getToken,
   money,
   normalizeContactInput,
-  paymentStatusLabel,
   statusLabel,
   validateContact,
   validateGmailAddress,
@@ -93,6 +92,7 @@ import {
   paymentStatusText,
   statusColor,
 } from "./lib/panelLogic.js";
+import { buildInvoiceHtml, openPrintableHtml } from "./lib/invoicePrint.js";
 
 const CardHeader = Card.Header;
 const CardBody = Card.Content;
@@ -248,98 +248,202 @@ function DashboardRangeSelect({ value, onChange, options, ariaLabel }) {
   );
 }
 
-function formatPrintableDate(value) {
-  if (!value) return "-";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
+function reportDateKey(value) {
+  const d = new Date(value || "");
+  if (Number.isNaN(d.getTime())) return String(value || "No date");
+  return d.toISOString().slice(0, 10);
 }
 
-function openPrintableHtml(html, { onError } = {}) {
-  const iframe = document.createElement("iframe");
-  iframe.title = "Printable document";
-  iframe.style.position = "fixed";
-  iframe.style.right = "0";
-  iframe.style.bottom = "0";
-  iframe.style.width = "0";
-  iframe.style.height = "0";
-  iframe.style.border = "0";
-  iframe.srcdoc = html;
-  iframe.onload = () => {
-    const win = iframe.contentWindow;
-    if (!win) {
-      iframe.remove();
-      onError?.();
-      return;
-    }
-    win.focus();
-    win.print();
-    setTimeout(() => iframe.remove(), 1000);
-  };
-  document.body.appendChild(iframe);
+function reportDateLabel(value) {
+  const d = new Date(value || "");
+  if (Number.isNaN(d.getTime())) return String(value || "No date");
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  });
 }
 
-function buildInvoiceHtml(invoice) {
-  const rows = (invoice?.items || []).map((item) => `
-    <tr>
-      <td>${String(item.product || "")}</td>
-      <td>${Number(item.quantity || 0)}</td>
-      <td>PHP ${Number(item.unitPrice || 0).toLocaleString("en-PH")}</td>
-      <td>PHP ${Number(item.lineTotal || 0).toLocaleString("en-PH")}</td>
-    </tr>
-  `).join("");
-  return `
-    <html>
-      <head>
-        <title>${invoice?.invoiceNumber || "Sales Invoice"}</title>
-        <style>
-          @page { size: A4; margin: 14mm; }
-          body { font-family: Arial, sans-serif; color: #0f172a; margin: 0; }
-          header { display:flex; justify-content:space-between; gap:24px; border-bottom:2px solid #0f172a; padding-bottom:12px; }
-          h1,h2,p { margin:0; }
-          .muted { color:#475569; font-size:12px; }
-          .grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; margin:18px 0; }
-          .card { border:1px solid #cbd5e1; border-radius:12px; padding:12px; }
-          table { width:100%; border-collapse:collapse; margin-top:16px; font-size:12px; }
-          th,td { border:1px solid #cbd5e1; padding:8px; text-align:left; }
-          th { background:#e2e8f0; }
-          .totals { margin-top:18px; width:320px; margin-left:auto; }
-          .totals div { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #e2e8f0; }
-          .grand { font-weight:800; font-size:14px; }
-        </style>
-      </head>
-      <body>
-        <header>
-          <div>
-            <h1>Jazjo Beverages</h1>
-            <p class="muted">${invoice?.company?.address || ""}</p>
-            <p class="muted">${invoice?.company?.contact || ""}</p>
-          </div>
-          <div>
-            <h2>Sales Invoice</h2>
-            <p class="muted">Invoice No: ${invoice?.invoiceNumber || "-"}</p>
-            <p class="muted">Order No: ${invoice?.orderNumber || "-"}</p>
-            <p class="muted">Date: ${formatPrintableDate(invoice?.createdAt)}</p>
-          </div>
-        </header>
-        <div class="grid">
-          <div class="card"><strong>Customer</strong><p class="muted">${invoice?.customer || "-"}</p></div>
-          <div class="card"><strong>Payment Method</strong><p class="muted">${invoice?.paymentMethod || "-"}</p></div>
-          <div class="card"><strong>Fulfillment</strong><p class="muted">${invoice?.fulfillmentType || "-"}</p></div>
-          <div class="card"><strong>Order Status</strong><p class="muted">${invoice?.orderStatus || "-"} / ${paymentStatusLabel(invoice?.paymentStatus || "", invoice?.orderStatus || "")}</p></div>
-        </div>
-        <table>
-          <thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="4">No items</td></tr>'}</tbody>
+function orderItemsSold(order) {
+  return (order?.items || []).reduce((sum, item) => sum + Number(item.qty || 0), 0);
+}
+
+function buildSalesSummaryRows(detail) {
+  const byDate = new Map();
+  for (const order of detail?.rows || []) {
+    const rawDate = order.createdAtRaw || order.createdAt || order.created_at;
+    const key = reportDateKey(rawDate);
+    const row = byDate.get(key) || {
+      key,
+      date: reportDateLabel(rawDate),
+      orders: 0,
+      itemsSold: 0,
+      sales: 0,
+      averageOrderValue: 0
+    };
+    row.orders += 1;
+    row.itemsSold += orderItemsSold(order);
+    row.sales += Number(order.total || 0);
+    row.averageOrderValue = row.orders ? row.sales / row.orders : 0;
+    byDate.set(key, row);
+  }
+  const rows = [...byDate.values()].sort((a, b) => a.key.localeCompare(b.key));
+  if (rows.length) return rows.slice(-7);
+  const totals = detail?.totals || {};
+  return [{
+    key: "total",
+    date: "Selected Period",
+    orders: Number(totals.orders || 0),
+    itemsSold: Number(totals.soldProducts || 0),
+    sales: Number(totals.totalSales || totals.revenue || 0),
+    averageOrderValue: Number(totals.orders || 0)
+      ? Number(totals.totalSales || totals.revenue || 0) / Number(totals.orders || 1)
+      : 0
+  }];
+}
+
+function SalesReportPreview({ detail }) {
+  const rows = buildSalesSummaryRows(detail);
+  const maxSales = Math.max(1, ...rows.map((row) => Number(row.sales || 0)));
+  const points = rows.map((row, idx) => {
+    const x = rows.length === 1 ? 50 : 40 + (idx * 540) / Math.max(1, rows.length - 1);
+    const y = 135 - (Number(row.sales || 0) / maxSales) * 105;
+    return { ...row, x, y };
+  });
+  const path = points.map((point, idx) => `${idx === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+  const total = rows.reduce((acc, row) => ({
+    orders: acc.orders + Number(row.orders || 0),
+    itemsSold: acc.itemsSold + Number(row.itemsSold || 0),
+    sales: acc.sales + Number(row.sales || 0)
+  }), { orders: 0, itemsSold: 0, sales: 0 });
+  const averageOrderValue = total.orders ? total.sales / total.orders : 0;
+
+  return (
+    <div className="rounded-2xl bg-white p-5 text-slate-950 shadow-xl">
+      <h3 className="text-sm font-black uppercase tracking-wide text-emerald-950">SALES OVERVIEW</h3>
+      <div className="mt-3 overflow-x-auto">
+        <svg viewBox="0 0 620 170" className="min-w-[620px] rounded-xl border border-slate-200 bg-white">
+          {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+            const y = 135 - tick * 105;
+            return (
+              <g key={tick}>
+                <line x1="40" x2="590" y1={y} y2={y} stroke="#e2e8f0" />
+                <text x="10" y={y + 4} fontSize="10" fill="#334155">{money(maxSales * tick)}</text>
+              </g>
+            );
+          })}
+          <path d={`${path} L 590 135 L 40 135 Z`} fill="rgba(34,197,94,.12)" />
+          <path d={path} fill="none" stroke="#15803d" strokeWidth="3" />
+          {points.map((point) => (
+            <g key={point.key}>
+              <circle cx={point.x} cy={point.y} r="4" fill="#15803d" />
+              <text x={point.x - 25} y="158" fontSize="10" fill="#0f172a">{point.date.replace(/, \d{4}$/, "")}</text>
+            </g>
+          ))}
+        </svg>
+      </div>
+      <h3 className="mt-6 text-sm font-black uppercase tracking-wide text-emerald-950">SALES SUMMARY TABLE</h3>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full min-w-[720px] border-collapse text-sm">
+          <thead>
+            <tr className="bg-slate-50">
+              <th className="border border-slate-200 px-3 py-2">Date</th>
+              <th className="border border-slate-200 px-3 py-2">Orders</th>
+              <th className="border border-slate-200 px-3 py-2">Items Sold (Cases)</th>
+              <th className="border border-slate-200 px-3 py-2">Sales (PHP)</th>
+              <th className="border border-slate-200 px-3 py-2">Average Order Value (PHP)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.key}>
+                <td className="border border-slate-200 px-3 py-2 font-semibold">{row.date}</td>
+                <td className="border border-slate-200 px-3 py-2 text-center">{row.orders}</td>
+                <td className="border border-slate-200 px-3 py-2 text-center">{formatQty(row.itemsSold)}</td>
+                <td className="border border-slate-200 px-3 py-2 text-right font-semibold">{money(row.sales)}</td>
+                <td className="border border-slate-200 px-3 py-2 text-right font-semibold">{money(row.averageOrderValue)}</td>
+              </tr>
+            ))}
+          </tbody>
         </table>
-        <div class="totals">
-          <div><span>Subtotal</span><strong>PHP ${Number(invoice?.subtotal || 0).toLocaleString("en-PH")}</strong></div>
-          <div><span>Delivery Fee</span><strong>PHP ${Number(invoice?.deliveryFee || 0).toLocaleString("en-PH")}</strong></div>
-          <div><span>Discount</span><strong>PHP ${Number(invoice?.discount || 0).toLocaleString("en-PH")}</strong></div>
-          <div class="grand"><span>Grand Total</span><strong>PHP ${Number(invoice?.grandTotal || 0).toLocaleString("en-PH")}</strong></div>
-        </div>
-      </body>
-    </html>
-  `;
+      </div>
+      <div className="mt-4 grid gap-3 rounded-lg bg-emerald-950 px-4 py-3 text-sm font-black text-white md:grid-cols-4">
+        <span>Total (Selected Period)</span>
+        <span>{total.orders}</span>
+        <span>{formatQty(total.itemsSold)}</span>
+        <span>{money(total.sales)} / {money(averageOrderValue)}</span>
+      </div>
+    </div>
+  );
+}
+
+function InventoryReductionSummary({ detail }) {
+  const rows = (detail?.inventorySummary || []).filter((row) => Number(row.reducedStock || row.stock_deducted || 0) > 0);
+  const displayRows = rows.length ? rows : (detail?.inventorySummary || []);
+  const totals = displayRows.reduce((acc, row) => ({
+    beginningStock: acc.beginningStock + Number(row.beginningStock || 0),
+    addedStock: acc.addedStock + Number(row.addedStock || 0),
+    reducedStock: acc.reducedStock + Number(row.reducedStock || 0),
+    endingStock: acc.endingStock + Number(row.endingStock || 0),
+    totalReductionValue: acc.totalReductionValue + Number(row.totalReductionValue || 0)
+  }), { beginningStock: 0, addedStock: 0, reducedStock: 0, endingStock: 0, totalReductionValue: 0 });
+
+  return (
+    <div className="rounded-2xl bg-white p-5 text-slate-950 shadow-xl">
+      <h3 className="text-sm font-black uppercase tracking-wide text-slate-950">INVENTORY REDUCTION SUMMARY</h3>
+      <div className="mt-3 max-h-[72vh] overflow-auto">
+        <table className="w-full min-w-[760px] border-collapse text-xs sm:text-sm">
+          <thead>
+            <tr className="bg-slate-50">
+              <th className="border border-slate-200 px-3 py-2">Product</th>
+              <th className="border border-slate-200 px-2 py-2">Beginning Stock (Cases)</th>
+              <th className="border border-slate-200 px-2 py-2">Added Stock (Cases)</th>
+              <th className="border border-slate-200 px-2 py-2">Reduced (Cases)</th>
+              <th className="border border-slate-200 px-2 py-2">Ending Stock (Cases)</th>
+              <th className="border border-slate-200 px-2 py-2">Unit Price (PHP)</th>
+              <th className="border border-slate-200 px-2 py-2">Total Reduction Value (PHP)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {displayRows.map((row, idx) => (
+              <tr key={row.productId || row.productName || idx}>
+                <td className="border border-slate-200 px-3 py-2">
+                  <div className="flex items-center gap-3">
+                    {row.imageUrl ? <img alt="" className="h-10 w-10 rounded bg-white object-contain" src={row.imageUrl} /> : null}
+                    <span className="font-black">{row.productName || "-"}</span>
+                  </div>
+                </td>
+                <td className="border border-slate-200 px-2 py-2 text-center">{formatQty(row.beginningStock || 0)}</td>
+                <td className="border border-slate-200 px-2 py-2 text-center">{formatQty(row.addedStock || 0)}</td>
+                <td className="border border-slate-200 px-2 py-2 text-center font-black text-red-600">{formatQty(row.reducedStock || 0)}</td>
+                <td className="border border-slate-200 px-2 py-2 text-center">{formatQty(row.endingStock || 0)}</td>
+                <td className="border border-slate-200 px-2 py-2 text-right font-semibold">{money(row.unitPrice || 0)}</td>
+                <td className="border border-slate-200 px-2 py-2 text-right font-black">{money(row.totalReductionValue || 0)}</td>
+              </tr>
+            ))}
+            {!displayRows.length ? (
+              <tr>
+                <td className="border border-slate-200 px-3 py-8 text-center text-slate-500" colSpan={7}>No inventory reductions found for this period.</td>
+              </tr>
+            ) : null}
+          </tbody>
+          <tfoot>
+            <tr className="bg-slate-50 font-black">
+              <td className="border border-slate-200 px-3 py-3">TOTAL</td>
+              <td className="border border-slate-200 px-2 py-3 text-center">{formatQty(totals.beginningStock)}</td>
+              <td className="border border-slate-200 px-2 py-3 text-center">{formatQty(totals.addedStock)}</td>
+              <td className="border border-slate-200 px-2 py-3 text-center text-red-600">{formatQty(totals.reducedStock)}</td>
+              <td className="border border-slate-200 px-2 py-3 text-center">{formatQty(totals.endingStock)}</td>
+              <td className="border border-slate-200 px-2 py-3"></td>
+              <td className="border border-slate-200 px-2 py-3 text-right text-red-700">{money(totals.totalReductionValue)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <p className="mt-4 text-xs text-slate-600">Note: Red numbers indicate reduced stock used or sold.</p>
+      <div className="ml-auto mt-8 max-w-xs border-t border-slate-400 pt-3 text-xs text-slate-700">Approved By:</div>
+    </div>
+  );
 }
 
 export default function AdminPanel({ isDark, onToggleTheme }) {
@@ -2539,7 +2643,7 @@ function AdminReportsPage({ setMessage }) {
       </Card>
       <Modal isOpen={!!selectedReport} onOpenChange={() => { setSelectedReport(null); setDetail(null); }}>
         <Modal.Backdrop>
-          <Modal.Container size="4xl">
+          <Modal.Container size="4xl" className="w-[min(96vw,1120px)]">
             <Modal.Dialog>
               <Modal.Header>
                 <div>
@@ -2568,40 +2672,48 @@ function AdminReportsPage({ setMessage }) {
                   <div className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-16 w-full" />)}</div>
                 ) : detail ? (
                   <>
-                    {detail.totals ? (
-                      <div className="grid gap-3 md:grid-cols-4">
-                        {Object.entries(detail.totals).map(([key, value]) => (
-                          <div key={key} className="rounded-xl border border-white/10 bg-white/[.04] p-3">
-                            <p className="text-xs font-bold uppercase text-slate-500">{key.replace(/([A-Z])/g, " $1")}</p>
-                            <p className="mt-1 font-semibold text-white">{typeof value === "number" && (key.toLowerCase().includes("sales") || key.toLowerCase().includes("revenue")) ? money(value) : String(value)}</p>
+                    {selectedReport?.key === "sales" ? (
+                      <SalesReportPreview detail={detail} />
+                    ) : selectedReport?.key === "inventory" ? (
+                      <InventoryReductionSummary detail={detail} />
+                    ) : (
+                      <>
+                        {detail.totals ? (
+                          <div className="grid gap-3 md:grid-cols-4">
+                            {Object.entries(detail.totals).map(([key, value]) => (
+                              <div key={key} className="rounded-xl border border-white/10 bg-white/[.04] p-3">
+                                <p className="text-xs font-bold uppercase text-slate-500">{key.replace(/([A-Z])/g, " $1")}</p>
+                                <p className="mt-1 font-semibold text-white">{typeof value === "number" && (key.toLowerCase().includes("sales") || key.toLowerCase().includes("revenue")) ? money(value) : String(value)}</p>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
-                    ) : null}
-                    {detail.paymentBreakdown ? (
-                      <Card><CardBody className="gap-3"><h3 className="text-sm font-bold">Payment Breakdown</h3>{detail.paymentBreakdown.map((row, idx) => <div key={idx} className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2"><span>{row.paymentMethod || row.label}</span><span className="font-semibold text-white">{row.revenue !== undefined ? `${row.orders} / ${money(row.revenue)}` : row.orders}</span></div>)}</CardBody></Card>
-                    ) : null}
-                    {detail.fulfillmentBreakdown ? (
-                      <Card><CardBody className="gap-3"><h3 className="text-sm font-bold">Fulfillment Breakdown</h3>{detail.fulfillmentBreakdown.map((row, idx) => <div key={idx} className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2"><span>{row.fulfillmentType}</span><span className="font-semibold text-white">{row.revenue !== undefined ? `${row.orders} / ${money(row.revenue)}` : row.orders}</span></div>)}</CardBody></Card>
-                    ) : null}
-                    {detail.statusBreakdown ? (
-                      <Card><CardBody className="gap-3"><h3 className="text-sm font-bold">Status Breakdown</h3>{Object.entries(detail.statusBreakdown).map(([label, value]) => <div key={label} className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2"><span>{label}</span><span className="font-semibold text-white">{value}</span></div>)}</CardBody></Card>
-                    ) : null}
-                    {detail.averageDeliveryTime ? <p className="text-sm text-slate-400">Average Delivery Time: <span className="font-semibold text-white">{detail.averageDeliveryTime}</span> | Completion Rate: <span className="font-semibold text-white">{detail.completionRate}%</span></p> : null}
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <THead>
-                          {selectedReport?.key === "inventory" ? <><Th>PRODUCT</Th><Th>ADDED</Th><Th>DEDUCTED</Th><Th>BEFORE</Th><Th>AFTER</Th><Th>DATE</Th><Th>UPDATED BY</Th><Th>REMARKS</Th></> : selectedReport?.key === "top-selling" ? <><Th>RANK</Th><Th>PRODUCT</Th><Th>QTY SOLD</Th><Th>REVENUE</Th><Th>CURRENT STOCK</Th><Th>TREND</Th></> : <><Th>REFERENCE</Th><Th>DETAIL</Th><Th>STATUS</Th></>}
-                        </THead>
-                        <TBody>
-                          {detailRows.map((row, idx) => (
-                            <Tr key={idx}>
-                              {selectedReport?.key === "inventory" ? <><Td>{row.product_name || row.productName || "-"}</Td><Td>{row.stock_added || 0}</Td><Td>{row.stock_deducted || 0}</Td><Td>{row.before_stock || 0}</Td><Td>{row.after_stock || 0}</Td><Td>{row.created_at || "-"}</Td><Td>{row.updated_by_name || row.updated_by || "-"}</Td><Td>{row.remarks || "-"}</Td></> : selectedReport?.key === "top-selling" ? <><Td>{row.ranking}</Td><Td>{row.product}</Td><Td>{row.quantitySold}</Td><Td>{money(row.revenue)}</Td><Td>{row.currentStock}</Td><Td>{row.trend}</Td></> : <><Td>{row.id || row.orderNumber || row.orderId || row.reportType || `Row ${idx + 1}`}</Td><Td className="text-sm text-slate-400">{row.customerName || row.coverage || row.customer || row.paymentMethod || row.fulfillmentType || "-"}</Td><Td>{row.status ? statusLabel(row.status) : row.reportType || "-"}</Td></>}
-                            </Tr>
-                          ))}
-                        </TBody>
-                      </Table>
-                    </div>
+                        ) : null}
+                        {detail.paymentBreakdown ? (
+                          <Card><CardBody className="gap-3"><h3 className="text-sm font-bold">Payment Breakdown</h3>{detail.paymentBreakdown.map((row, idx) => <div key={idx} className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2"><span>{row.paymentMethod || row.label}</span><span className="font-semibold text-white">{row.revenue !== undefined ? `${row.orders} / ${money(row.revenue)}` : row.orders}</span></div>)}</CardBody></Card>
+                        ) : null}
+                        {detail.fulfillmentBreakdown ? (
+                          <Card><CardBody className="gap-3"><h3 className="text-sm font-bold">Fulfillment Breakdown</h3>{detail.fulfillmentBreakdown.map((row, idx) => <div key={idx} className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2"><span>{row.fulfillmentType}</span><span className="font-semibold text-white">{row.revenue !== undefined ? `${row.orders} / ${money(row.revenue)}` : row.orders}</span></div>)}</CardBody></Card>
+                        ) : null}
+                        {detail.statusBreakdown ? (
+                          <Card><CardBody className="gap-3"><h3 className="text-sm font-bold">Status Breakdown</h3>{Object.entries(detail.statusBreakdown).map(([label, value]) => <div key={label} className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2"><span>{label}</span><span className="font-semibold text-white">{value}</span></div>)}</CardBody></Card>
+                        ) : null}
+                        {detail.averageDeliveryTime ? <p className="text-sm text-slate-400">Average Delivery Time: <span className="font-semibold text-white">{detail.averageDeliveryTime}</span> | Completion Rate: <span className="font-semibold text-white">{detail.completionRate}%</span></p> : null}
+                        <div className="overflow-x-auto">
+                          <Table>
+                            <THead>
+                              {selectedReport?.key === "top-selling" ? <><Th>RANK</Th><Th>PRODUCT</Th><Th>QTY SOLD</Th><Th>REVENUE</Th><Th>CURRENT STOCK</Th><Th>TREND</Th></> : <><Th>REFERENCE</Th><Th>DETAIL</Th><Th>STATUS</Th></>}
+                            </THead>
+                            <TBody>
+                              {detailRows.map((row, idx) => (
+                                <Tr key={idx}>
+                                  {selectedReport?.key === "top-selling" ? <><Td>{row.ranking}</Td><Td>{row.product}</Td><Td>{row.quantitySold}</Td><Td>{money(row.revenue)}</Td><Td>{row.currentStock}</Td><Td>{row.trend}</Td></> : <><Td>{row.id || row.orderNumber || row.orderId || row.reportType || `Row ${idx + 1}`}</Td><Td className="text-sm text-slate-400">{row.customerName || row.coverage || row.customer || row.paymentMethod || row.fulfillmentType || "-"}</Td><Td>{row.status ? statusLabel(row.status) : row.reportType || "-"}</Td></>}
+                                </Tr>
+                              ))}
+                            </TBody>
+                          </Table>
+                        </div>
+                      </>
+                    )}
                   </>
                 ) : null}
               </Modal.Body>

@@ -39,3 +39,32 @@ test("checkout supports delivery and pickup fulfillment", () => {
   assert.match(serverSource, /const fulfillmentType = normalizeFulfillmentType/);
   assert.match(migrationSource, /add column if not exists fulfillment_type/);
 });
+
+test("cart checkout shows inline related product recommendations", () => {
+  const shopPage = source.slice(
+    source.indexOf("function ShopPage"),
+    source.indexOf("function Dashboard"),
+  );
+  const cartPage = source.slice(
+    source.indexOf("function CartPage"),
+    source.indexOf("function OrdersPage"),
+  );
+  const recommendationCard = source.slice(
+    source.indexOf("function RecommendationCard"),
+    source.indexOf("function ShopPage"),
+  );
+  assert.match(source, /<CartPage[\s\S]*onAdd=\{addToCart\}/);
+  assert.match(cartPage, /recommendRelatedProducts\(products, recommendationAnchor, \{ limit: 5 \}\)/);
+  assert.match(cartPage, /You may also like/);
+  assert.match(source, /function RecommendationCard/);
+  assert.match(cartPage, /xl:grid-cols-\[minmax\(0,1fr\)_minmax\(420px,460px\)\]/);
+  assert.doesNotMatch(cartPage, /lg:grid-cols-\[1\.2fr_\.8fr\]/);
+  assert.match(cartPage, /grid gap-3 sm:grid-cols-2/);
+  assert.doesNotMatch(cartPage, /overflow-x-auto/);
+  assert.match(cartPage, /<RecommendationCard key=\{product\.id\} product=\{product\} onAdd=\{onAdd\}/);
+  assert.match(recommendationCard, /grid-cols-\[64px_1fr\]/);
+  assert.doesNotMatch(recommendationCard, /min-w-\[/);
+  assert.doesNotMatch(recommendationCard, /sm:flex/);
+  assert.doesNotMatch(shopPage, /You may also like/);
+  assert.doesNotMatch(shopPage, /<Modal/);
+});

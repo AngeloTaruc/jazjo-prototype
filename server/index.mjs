@@ -1574,6 +1574,31 @@ function computeTopSellingProducts(orders = []){
   return [...byProduct.values()].sort((a, b) => Number(b.quantitySold || 0) - Number(a.quantitySold || 0));
 }
 
+function computeSalesReductionByProduct(orders = []){
+  const salesReductionByProduct = new Map();
+  for(const order of orders || []){
+    for(const item of order.items || []){
+      const keys = [
+        String(item.productId || "").trim(),
+        String(item.sku || "").trim(),
+        String(item.name || "").trim()
+      ].filter(Boolean);
+      if(!keys.length) continue;
+      const primaryKey = keys[0];
+      const current = salesReductionByProduct.get(primaryKey) || {
+        productId: String(item.productId || "").trim(),
+        productName: String(item.name || item.productId || "").trim(),
+        reducedStock: 0
+      };
+      current.reducedStock += Number(item.qty || 0);
+      for(const key of keys){
+        salesReductionByProduct.set(key, current);
+      }
+    }
+  }
+  return salesReductionByProduct;
+}
+
 function computePaymentBreakdown(orders = []){
   const breakdown = new Map();
   for(const order of orders || []){
@@ -1820,6 +1845,36 @@ async function getPanelReportDetail(type, { range = "all", from = "", to = "" } 
   if(reportType === "inventory"){
     const bounds = getRangeBounds(range, from, to);
     const filteredHistory = inventoryHistory.filter((row) => isWithinRange(row.created_at, bounds));
+    const salesReductionByProduct = computeSalesReductionByProduct(activeOrders);
+    const inventorySummary = products.map((product) => {
+      const movements = filteredHistory.filter((row) => {
+        return String(row.product_id || "") === String(product.dbId || product.id || "")
+          || String(row.product_sku || "") === String(product.sku || "")
+          || String(row.product_name || "") === String(product.name || "");
+      });
+      const addedStock = movements.reduce((sum, row) => sum + Number(row.stock_added || 0), 0);
+      const historyReducedStock = movements.reduce((sum, row) => sum + Number(row.stock_deducted || 0), 0);
+      const soldReduction = salesReductionByProduct.get(String(product.sku || ""))
+        || salesReductionByProduct.get(String(product.id || ""))
+        || salesReductionByProduct.get(String(product.dbId || ""))
+        || salesReductionByProduct.get(String(product.name || ""));
+      const reducedStock = historyReducedStock || Number(soldReduction?.reducedStock || 0);
+      const endingStock = Number(product.stockCases || 0);
+      const beginningStock = Math.max(0, endingStock - addedStock + reducedStock);
+      const unitPrice = Number(product.price || 0);
+      return {
+        productId: product.id,
+        productName: product.name,
+        imageUrl: product.image_url || product.img || "",
+        beginningStock,
+        addedStock,
+        reducedStock,
+        endingStock,
+        unitPrice,
+        totalReductionValue: Number((reducedStock * unitPrice).toFixed(2)),
+        reductionSource: historyReducedStock ? "inventory_history" : reducedStock ? "order_items" : "none"
+      };
+    }).sort((a, b) => Number(b.reducedStock || 0) - Number(a.reducedStock || 0));
     return {
       type: "inventory",
       title: "Inventory Report",
@@ -1830,6 +1885,7 @@ async function getPanelReportDetail(type, { range = "all", from = "", to = "" } 
         outOfStock: products.filter((p) => Number(p.stockCases) <= 0).length,
         movements: filteredHistory.length
       },
+      inventorySummary,
       rows: filteredHistory
     };
   }

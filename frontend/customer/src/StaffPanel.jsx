@@ -20,6 +20,7 @@ import {
   Warehouse,
   RefreshCw,
   Eye,
+  Printer,
   Save,
 } from "lucide-react";
 import {
@@ -35,11 +36,13 @@ import {
   apiStaffUploadProductImage,
   apiUpdateOrderStatus,
   apiUpdateOrderDetails,
+  apiOrderInvoice,
   apiPrepareOrder,
   apiUpdateOrderPreparation
 } from "./lib/api.js";
 import { clearSession, formatQty, getToken, money, normalizeContactInput, statusLabel } from "./lib/customerLogic.js";
 import { AdminInventoryPage } from "./AdminPanel.jsx";
+import { buildInvoiceHtml, openPrintableHtml } from "./lib/invoicePrint.js";
 import {
   formatFulfillmentType,
   fulfillmentColor,
@@ -471,6 +474,7 @@ function StaffOrdersPage({ setMessage }) {
   const [savingEdit, setSavingEdit] = useState(false);
   const [savingPreparation, setSavingPreparation] = useState(false);
   const [submittingPrepare, setSubmittingPrepare] = useState(false);
+  const [loadingInvoice, setLoadingInvoice] = useState("");
   const perPage = 10;
   const statuses = ["All", "Pending Payment", "Order Placed", "Preparing", "In Transit", "Out for Delivery", "Delivered", "Cancelled"];
   const editableStatuses = statuses.filter((status) => status !== "All");
@@ -549,6 +553,18 @@ function StaffOrdersPage({ setMessage }) {
       setMessage(`Error: ${err.message}`);
     } finally {
       setSavingEdit(false);
+    }
+  };
+  const openSalesInvoice = async (order) => {
+    if (!order?.id) return;
+    setLoadingInvoice(order.id);
+    try {
+      const invoice = await apiOrderInvoice(order.id);
+      openPrintableHtml(buildInvoiceHtml(invoice));
+    } catch (err) {
+      setMessage(`Error: ${err.message || "Unable to prepare sales invoice."}`);
+    } finally {
+      setLoadingInvoice("");
     }
   };
   const updatePreparation = async (productId, prepared) => {
@@ -631,6 +647,15 @@ function StaffOrdersPage({ setMessage }) {
                           <Button size="sm" variant="flat" onPress={() => openEditOrder(order)}>
                             <Eye size={14} />
                             Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="flat"
+                            isDisabled={loadingInvoice === order.id}
+                            onPress={() => openSalesInvoice(order)}
+                          >
+                            <Printer size={14} />
+                            {loadingInvoice === order.id ? "Preparing..." : "Sales Invoice"}
                           </Button>
                         </div>
                       </Td>
@@ -756,6 +781,14 @@ function StaffOrdersPage({ setMessage }) {
               </Modal.Body>
               <Modal.Footer>
                 <Button variant="flat" onPress={() => { setEditingOrder(null); setEditForm(null); }}>Cancel</Button>
+                <Button
+                  variant="flat"
+                  isDisabled={!editingOrder || loadingInvoice === editingOrder?.id}
+                  onPress={() => openSalesInvoice(editingOrder)}
+                >
+                  <Printer size={16} />
+                  {loadingInvoice === editingOrder?.id ? "Preparing..." : "Sales Invoice"}
+                </Button>
                 <Button color="warning" isLoading={savingEdit} onPress={saveOrderEdit}>
                   <Save size={16} />
                   Save Changes
