@@ -665,9 +665,6 @@ function validatePasswordComplexity(password){
   if(!value.trim()){
     throw httpError("Password is required.");
   }
-  if(value.length < 8){
-    throw httpError("Password must be at least 8 characters.");
-  }
   return value;
 }
 

@@ -201,8 +201,8 @@ test("validateDeliveryAddress requires province and city selections", () => {
 test("validatePassword only requires a non-empty password", () => {
   assert.equal(validatePassword("").ok, false);
   assert.match(validatePassword("").message, /required/i);
-  assert.equal(validatePassword("a").ok, false);
-  assert.match(validatePassword("short").message, /at least 8/i);
+  assert.equal(validatePassword("a").ok, true);
+  assert.equal(validatePassword("short").ok, true);
   assert.equal(validatePassword("password123").ok, true);
 });
 

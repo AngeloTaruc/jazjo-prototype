@@ -98,11 +98,8 @@ test("validateCustomerRegistration rejects invalid Philippine contact", () => {
   );
 });
 
-test("validatePasswordComplexity requires a minimum-length password", () => {
-  assert.throws(
-    () => server.validatePasswordComplexity("short"),
-    /at least 8 characters/
-  );
+test("validatePasswordComplexity only requires a non-empty password", () => {
+  assert.equal(server.validatePasswordComplexity("short"), "short");
   assert.equal(server.validatePasswordComplexity("password123"), "password123");
   assert.throws(
     () => server.validatePasswordComplexity(""),
